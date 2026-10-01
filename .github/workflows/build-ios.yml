@@ -1,0 +1,150 @@
+name: Build Memora iOS (.ipa & .app)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Target to compile'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - device_ipa
+          - simulator_app
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile with Xcode 16 on macOS
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: |
+          echo "=== Versiones de Xcode disponibles en el runner ==="
+          ls -d /Applications/Xcode* || true
+          
+          # Priorizar Xcode 16 o la version mas reciente instalada
+          if [ -d "/Applications/Xcode_16.0.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.0.app
+          elif [ -d "/Applications/Xcode_16.1.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.1.app
+          elif [ -d "/Applications/Xcode_16.2.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.2.app
+          elif [ -d "/Applications/Xcode_16.app" ]; then
+            sudo xcode-select -s /Applications/Xcode_16.app
+          fi
+          
+          echo "=== Versión de Xcode activa ==="
+          xcodebuild -version
+
+      - name: Inspect Xcode Scheme and Targets
+        run: |
+          xcodebuild -list -project Memora.xcodeproj
+
+      # ----------------------------------------------------
+      # 1. Compilación para iPhone Físico (.ipa)
+      # ----------------------------------------------------
+      - name: Build for Physical iOS Device
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'device_ipa' }}
+        run: |
+          echo "Compilando Memora para arquitectura arm64 (iPhone físico)..."
+          xcodebuild clean build \
+            -project Memora.xcodeproj \
+            -scheme Memora \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath derived_data_device \
+            CODE_SIGN_STYLE="Manual" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package .ipa for Physical iPhone
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'device_ipa' }}
+        run: |
+          echo "Creando estructura Payload para .ipa..."
+          rm -rf Payload Memora.ipa
+          mkdir -p Payload
+          cp -R derived_data_device/Build/Products/Release-iphoneos/Memora.app Payload/
+          zip -r Memora.ipa Payload
+          ls -lh Memora.ipa
+
+      # ----------------------------------------------------
+      # 2. Compilación para Simulador iOS (.app.zip)
+      # ----------------------------------------------------
+      - name: Build for iOS Simulator
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'simulator_app' }}
+        run: |
+          echo "Compilando Memora para simulador iPhone..."
+          xcodebuild clean build \
+            -project Memora.xcodeproj \
+            -scheme Memora \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath derived_data_sim \
+            CODE_SIGN_STYLE="Manual" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package Simulator .app.zip
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'simulator_app' }}
+        run: |
+          cd derived_data_sim/Build/Products/Release-iphonesimulator
+          zip -r "$GITHUB_WORKSPACE/Memora-Simulator.app.zip" Memora.app
+          cd "$GITHUB_WORKSPACE"
+          ls -lh Memora-Simulator.app.zip
+
+      # ----------------------------------------------------
+      # 3. Subir artefactos a GitHub Actions
+      # ----------------------------------------------------
+      - name: Upload .ipa (Physical iPhone)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'device_ipa' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Memora-iOS-Device-ipa
+          path: Memora.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Simulator App
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_target == 'all' || github.event.inputs.build_target == 'simulator_app' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Memora-iOS-Simulator-app
+          path: Memora-Simulator.app.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Generate Job Summary
+        run: |
+          echo "## 🚀 Compilación de Memora iOS Completada" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Artefactos Generados:" >> $GITHUB_STEP_SUMMARY
+          if [ -f Memora.ipa ]; then
+            echo "- **Memora-iOS-Device-ipa** (\`Memora.ipa\`): Listo para instalar en iPhone físico con Sideloadly, AltStore, TrollStore o certificados ad-hoc." >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f Memora-Simulator.app.zip ]; then
+            echo "- **Memora-iOS-Simulator-app** (\`Memora-Simulator.app.zip\`): Listo para arrastrar y soltar en el Simulador de iOS en Mac." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📲 Cómo instalar el .ipa en tu iPhone desde Windows (gratis y sin Mac):" >> $GITHUB_STEP_SUMMARY
+          echo "1. Descarga e instala **[Sideloadly](https://sideloadly.io/)** (o AltStore) en tu PC con Windows." >> $GITHUB_STEP_SUMMARY
+          echo "2. Conecta tu iPhone a la PC mediante cable USB." >> $GITHUB_STEP_SUMMARY
+          echo "3. Abre Sideloadly y arrastra el archivo \`Memora.ipa\` descargado desde los artefactos." >> $GITHUB_STEP_SUMMARY
+          echo "4. Introduce tu Apple ID personal para firmar gratis la app y presiona **Start**." >> $GITHUB_STEP_SUMMARY
+          echo "5. En tu iPhone, ve a *Ajustes > General > VPN y gestión de dispositivos* y confía en tu Apple ID." >> $GITHUB_STEP_SUMMARY
+          echo "6. ¡Listo! Abre **Memora** en tu pantalla de inicio." >> $GITHUB_STEP_SUMMARY

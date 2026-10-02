@@ -1,9 +1,86 @@
 import CryptoKit
 import Foundation
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+
+struct AssetMetadataExtractor {
+    static func extract(from data: Data) -> (
+        camera: String?,
+        iso: Int?,
+        aperture: Double?,
+        focalLength: Double?,
+        width: Int?,
+        height: Int?,
+        date: Date?,
+        location: String?,
+        lat: Double?,
+        lon: Double?
+    ) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return (nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+        }
+
+        let width = properties[kCGImagePropertyPixelWidth] as? Int
+        let height = properties[kCGImagePropertyPixelHeight] as? Int
+
+        var camera: String?
+        if let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any] {
+            let make = tiff[kCGImagePropertyTIFFMake] as? String
+            let model = tiff[kCGImagePropertyTIFFModel] as? String
+            if let model, !model.isEmpty {
+                camera = model
+            } else if let make {
+                camera = make
+            }
+        }
+
+        var iso: Int?
+        var aperture: Double?
+        var focalLength: Double?
+        var capturedDate: Date?
+
+        if let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any] {
+            if let isoArray = exif[kCGImagePropertyExifISOSpeedRatings] as? [Int], let firstIso = isoArray.first {
+                iso = firstIso
+            } else if let isoVal = exif[kCGImagePropertyExifISOSpeedRatings] as? Int {
+                iso = isoVal
+            }
+            if let fNum = exif[kCGImagePropertyExifFNumber] as? Double {
+                aperture = fNum
+            }
+            if let focal = exif[kCGImagePropertyExifFocalLength] as? Double {
+                focalLength = focal
+            }
+            if let dateStr = exif[kCGImagePropertyExifDateTimeOriginal] as? String {
+                let df = DateFormatter()
+                df.dateFormat = "yyyy:MM:dd HH:mm:ss"
+                capturedDate = df.date(from: dateStr)
+            }
+        }
+
+        var locationStr: String?
+        var lat: Double?
+        var lon: Double?
+        if let gps = properties[kCGImagePropertyGPSDictionary] as? [CFString: Any] {
+            if let latitude = gps[kCGImagePropertyGPSLatitude] as? Double,
+               let longitude = gps[kCGImagePropertyGPSLongitude] as? Double {
+                let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String ?? "N"
+                let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String ?? "E"
+                let finalLat = latRef == "S" ? -latitude : latitude
+                let finalLon = lonRef == "W" ? -longitude : longitude
+                lat = finalLat
+                lon = finalLon
+                locationStr = String(format: "%.3f, %.3f", finalLat, finalLon)
+            }
+        }
+
+        return (camera, iso, aperture, focalLength, width, height, capturedDate, locationStr, lat, lon)
+    }
+}
 
 @MainActor
 final class MemoryStore: ObservableObject {
@@ -297,6 +374,20 @@ final class MemoryStore: ObservableObject {
         try? persistSessionIfEnabled()
     }
 
+    func updateProfilePhoto(data: Data) throws {
+        guard var record = account else { throw MemoraError.noAccount }
+        record.profilePhotoData = data
+        account = record
+        try saveAccount()
+    }
+
+    func removeProfilePhoto() throws {
+        guard var record = account else { throw MemoraError.noAccount }
+        record.profilePhotoData = nil
+        account = record
+        try saveAccount()
+    }
+
     func changePassword(current: String, new: String) throws {
         guard new.count >= 12, var record = account, let rootKey else {
             throw MemoraError.invalidInput("La contraseña nueva debe tener al menos 12 caracteres.")
@@ -454,12 +545,182 @@ final class MemoryStore: ObservableObject {
     }
 
     func add(_ assetID: UUID, to albumID: UUID) throws {
-        guard library.albums.contains(where: { $0.id == albumID }),
-              let index = library.assets.firstIndex(where: { $0.id == assetID }) else { return }
-        if !library.assets[index].albumIDs.contains(albumID) {
-            library.assets[index].albumIDs.append(albumID)
-            try saveLibrary()
+        try addAssets([assetID], toAlbum: albumID)
+    }
+
+    func addAssets(_ assetIDs: [UUID], toAlbum albumID: UUID) throws {
+        guard library.albums.contains(where: { $0.id == albumID }) else { return }
+        for assetID in assetIDs {
+            if let index = library.assets.firstIndex(where: { $0.id == assetID }) {
+                if !library.assets[index].albumIDs.contains(albumID) {
+                    library.assets[index].albumIDs.append(albumID)
+                }
+            }
         }
+        try saveLibrary()
+    }
+
+    func removeAsset(_ assetID: UUID, fromAlbum albumID: UUID) throws {
+        guard let index = library.assets.firstIndex(where: { $0.id == assetID }) else { return }
+        library.assets[index].albumIDs.removeAll { $0 == albumID }
+        try saveLibrary()
+    }
+
+    func assignAlbum(_ albumID: UUID, toSection sectionID: UUID?) throws {
+        guard let index = library.albums.firstIndex(where: { $0.id == albumID }) else { return }
+        library.albums[index].sectionID = sectionID
+        try saveLibrary()
+    }
+
+    func addAssets(_ assetIDs: [UUID], toSection sectionID: UUID) throws {
+        guard let section = library.sections.first(where: { $0.id == sectionID }) else { return }
+        var targetAlbum = library.albums.first(where: { $0.sectionID == sectionID })
+        if targetAlbum == nil {
+            let newAlbum = MemoryAlbum(id: UUID(), name: "General · \(section.name)", sectionID: sectionID, createdAt: .now)
+            library.albums.append(newAlbum)
+            targetAlbum = newAlbum
+        }
+        if let targetAlbum {
+            try addAssets(assetIDs, toAlbum: targetAlbum.id)
+        }
+    }
+
+    func updateAssetMetadata(id: UUID, location: String, tags: [String], capturedAt: Date? = nil) throws {
+        guard let index = library.assets.firstIndex(where: { $0.id == id }) else { return }
+        library.assets[index].location = location.trimmingCharacters(in: .whitespaces)
+        library.assets[index].tags = tags.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if let capturedAt {
+            library.assets[index].capturedAt = capturedAt
+        }
+        try saveLibrary()
+    }
+
+    var facesCatalog: [UUID: DetectedFace] {
+        Dictionary(uniqueKeysWithValues: library.detectedFaces.map { ($0.id, $0) })
+    }
+
+    func processFacesForAsset(_ assetID: UUID, image: UIImage) async {
+        let faces = await FaceEngine.analyzeImage(image, assetID: assetID)
+        guard !faces.isEmpty else { return }
+
+        for face in faces {
+            library.detectedFaces.removeAll { $0.id == face.id }
+            var faceToAdd = face
+
+            if face.quality >= FaceEngine.qualityGateMinimum {
+                let classification = FaceEngine.classifyFace(face, against: library.people, facesCatalog: facesCatalog)
+                if let matchedPersonID = classification.personID {
+                    if classification.zone == .high {
+                        faceToAdd.personID = matchedPersonID
+                        faceToAdd.confidence = classification.confidence
+                        faceToAdd.reviewStatus = .confirmed
+                        try? assign(assetID, to: matchedPersonID)
+                    } else if classification.zone == .review {
+                        faceToAdd.personID = matchedPersonID
+                        faceToAdd.confidence = classification.confidence
+                        faceToAdd.reviewStatus = .suggested
+                        if let pIdx = library.people.firstIndex(where: { $0.id == matchedPersonID }) {
+                            if !library.people[pIdx].reviewCandidateAssetIDs.contains(assetID) {
+                                library.people[pIdx].reviewCandidateAssetIDs.append(assetID)
+                            }
+                        }
+                    }
+                }
+            }
+            library.detectedFaces.append(faceToAdd)
+        }
+        recomputeClusters()
+        try? saveLibrary()
+    }
+
+    func confirmFaceReview(faceID: UUID, personID: UUID) throws {
+        guard let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }),
+              let pIdx = library.people.firstIndex(where: { $0.id == personID }) else { return }
+        library.detectedFaces[fIdx].personID = personID
+        library.detectedFaces[fIdx].reviewStatus = .confirmed
+        let assetID = library.detectedFaces[fIdx].assetID
+        try assign(assetID, to: personID)
+        library.people[pIdx].reviewCandidateAssetIDs.removeAll { $0 == assetID }
+
+        if !library.people[pIdx].exemplarFaceIDs.contains(faceID) {
+            library.people[pIdx].exemplarFaceIDs.append(faceID)
+        }
+        updatePersonPrototype(personID: personID)
+        try saveLibrary()
+    }
+
+    func correctFace(faceID: UUID, correctPersonID: UUID) throws {
+        guard let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }),
+              let pIdx = library.people.firstIndex(where: { $0.id == correctPersonID }) else { return }
+
+        let oldPersonID = library.detectedFaces[fIdx].personID
+        library.detectedFaces[fIdx].personID = correctPersonID
+        library.detectedFaces[fIdx].reviewStatus = .confirmed
+        let assetID = library.detectedFaces[fIdx].assetID
+
+        try assign(assetID, to: correctPersonID)
+
+        if let oldPersonID, let oldIdx = library.people.firstIndex(where: { $0.id == oldPersonID }) {
+            library.people[oldIdx].exemplarFaceIDs.removeAll { $0 == faceID }
+            library.people[oldIdx].reviewCandidateAssetIDs.removeAll { $0 == assetID }
+            updatePersonPrototype(personID: oldPersonID)
+        }
+
+        if !library.people[pIdx].exemplarFaceIDs.contains(faceID) {
+            library.people[pIdx].exemplarFaceIDs.append(faceID)
+        }
+        updatePersonPrototype(personID: correctPersonID)
+        try saveLibrary()
+    }
+
+    func updatePersonPrototype(personID: UUID) {
+        guard let pIdx = library.people.firstIndex(where: { $0.id == personID }) else { return }
+        let catalog = facesCatalog
+        let embeddings: [[Float]] = library.people[pIdx].exemplarFaceIDs.compactMap { catalog[$0]?.embedding }
+        library.people[pIdx].prototype = FaceEngine.computePrototype(from: embeddings)
+    }
+
+    func nameCluster(_ clusterID: UUID, name: String) throws {
+        guard let cluster = library.clusters.first(where: { $0.id == clusterID }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let repFace = library.detectedFaces.first(where: { $0.id == cluster.representativeFaceID })
+        let person = MemoryPerson(
+            id: UUID(),
+            name: trimmed,
+            coverAssetID: repFace?.assetID,
+            exemplarFaceIDs: cluster.faceIDs
+        )
+        library.people.append(person)
+
+        for faceID in cluster.faceIDs {
+            if let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }) {
+                library.detectedFaces[fIdx].personID = person.id
+                library.detectedFaces[fIdx].reviewStatus = .confirmed
+                let assetID = library.detectedFaces[fIdx].assetID
+                try? assign(assetID, to: person.id)
+            }
+        }
+
+        updatePersonPrototype(personID: person.id)
+        library.clusters.removeAll { $0.id == clusterID }
+        try saveLibrary()
+    }
+
+    func recomputeClusters() {
+        let unassigned = library.detectedFaces.filter { $0.personID == nil }
+        library.clusters = FaceEngine.clusterFaces(unassignedFaces: unassigned)
+    }
+
+    func searchPeopleByPhoto(image: UIImage) async -> [FaceMatchResult] {
+        return await FaceEngine.searchPeopleByPhoto(
+            queryImage: image,
+            people: library.people,
+            albums: library.albums,
+            assets: activeAssets,
+            facesCatalog: facesCatalog
+        )
     }
 
     func assign(_ assetID: UUID, to personID: UUID) throws {
@@ -545,7 +806,9 @@ final class MemoryStore: ObservableObject {
         try write(encrypted, to: originalURL)
         var thumbnail = false
         do {
+            var sourceImage: UIImage? = nil
             if mime.hasPrefix("image/"), let image = UIImage(data: data) {
+                sourceImage = image
                 let side: CGFloat = 420
                 let ratio = min(side / image.size.width, side / image.size.height, 1)
                 let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
@@ -559,18 +822,46 @@ final class MemoryStore: ObservableObject {
                     thumbnail = true
                 }
             }
+
+            let meta = AssetMetadataExtractor.extract(from: data)
             let asset = MemoryAsset(
-                id: id, name: name, mime: mime, kind: .classify(mime), size: data.count,
-                addedAt: .now, capturedAt: .now, sha256: hash, wrappedFileKey: envelope,
-                hasThumbnail: thumbnail
+                id: id,
+                name: name,
+                mime: mime,
+                kind: .classify(mime),
+                size: data.count,
+                addedAt: .now,
+                capturedAt: meta.date ?? .now,
+                sha256: hash,
+                wrappedFileKey: envelope,
+                location: meta.location ?? "",
+                hasThumbnail: thumbnail,
+                cameraModel: meta.camera,
+                iso: meta.iso,
+                aperture: meta.aperture,
+                focalLength: meta.focalLength,
+                width: meta.width,
+                height: meta.height,
+                latitude: meta.lat,
+                longitude: meta.lon
             )
+
             if secure {
                 guard privateLibrary != nil else { throw MemoraError.locked }
                 privateLibrary?.assets.insert(asset, at: 0)
                 try saveVault()
             } else {
                 library.assets.insert(asset, at: 0)
+                if !library.processedAssetHashes.contains(hash) {
+                    library.processedAssetHashes.append(hash)
+                }
                 try saveLibrary()
+
+                if let img = sourceImage {
+                    Task { [weak self] in
+                        await self?.processFacesForAsset(id, image: img)
+                    }
+                }
             }
         } catch {
             library = previousLibrary

@@ -46,6 +46,15 @@ struct MemoryAsset: Identifiable, Codable, Hashable {
     var favorite = false
     var hasThumbnail = false
     var deletedAt: Date?
+    // Metadatos EXIF y técnicos
+    var cameraModel: String? = nil
+    var iso: Int? = nil
+    var aperture: Double? = nil
+    var focalLength: Double? = nil
+    var width: Int? = nil
+    var height: Int? = nil
+    var latitude: Double? = nil
+    var longitude: Double? = nil
 }
 
 struct MemorySection: Identifiable, Codable, Hashable {
@@ -66,14 +75,67 @@ struct MemoryPerson: Identifiable, Codable, Hashable {
     var id: UUID
     var name: String
     var coverAssetID: UUID?
+    var prototype: [Float]? = nil
+    var exemplarFaceIDs: [UUID] = []
+    var reviewCandidateAssetIDs: [UUID] = []
+}
+
+// MARK: - Modelos de Face Engine v2
+struct FaceBoundingBox: Codable, Hashable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+}
+
+enum FaceReviewStatus: String, Codable, Hashable {
+    case confirmed
+    case suggested
+    case unassigned
+}
+
+struct DetectedFace: Identifiable, Codable, Hashable {
+    var id: UUID
+    var assetID: UUID
+    var bbox: FaceBoundingBox
+    var quality: Double
+    var embedding: [Float]
+    var personID: UUID?
+    var confidence: Double
+    var reviewStatus: FaceReviewStatus = .unassigned
+}
+
+struct FaceCluster: Identifiable, Codable, Hashable {
+    var id: UUID
+    var faceIDs: [UUID]
+    var representativeFaceID: UUID
+    var suggestedName: String?
+}
+
+struct FaceMatchResult: Identifiable, Hashable {
+    var id: UUID { person.id }
+    let person: MemoryPerson
+    let confidence: Double
+    let zone: ConfidenceZone
+    let albumCount: Int
+    let assetCount: Int
+
+    enum ConfidenceZone: String, Hashable {
+        case high = "Alta confianza"
+        case review = "Dudoso (Revisar)"
+        case low = "Baja coincidencia"
+    }
 }
 
 struct MemoryLibrary: Codable {
-    var version = 1
+    var version = 2
     var assets: [MemoryAsset] = []
     var sections: [MemorySection] = []
     var albums: [MemoryAlbum] = []
     var people: [MemoryPerson] = []
+    var detectedFaces: [DetectedFace] = []
+    var clusters: [FaceCluster] = []
+    var processedAssetHashes: [String] = []
 }
 
 struct PrivateLibrary: Codable {
@@ -95,6 +157,7 @@ struct AccountRecord: Codable {
     var vaultSalt: Data?
     var wrappedVaultKey: Data?
     var vaultRecoveryEnvelope: Data?
+    var profilePhotoData: Data? = nil
 }
 
 enum MemoraError: LocalizedError {

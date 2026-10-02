@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PhotosUI
 
 struct ProfileView: View {
     @ObservedObject var store: MemoryStore
@@ -26,9 +27,19 @@ struct ProfileView: View {
                 }
                 Panel {
                     HStack(spacing: 16) {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 64, weight: .ultraLight))
-                            .foregroundStyle(MemoraStyle.cream)
+                        if let photoData = store.account?.profilePhotoData,
+                           let uiImage = UIImage(data: photoData) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 64, height: 64)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(MemoraStyle.line, lineWidth: 1))
+                        } else {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.system(size: 64, weight: .ultraLight))
+                                .foregroundStyle(MemoraStyle.cream)
+                        }
                         VStack(alignment: .leading, spacing: 4) {
                             Text(store.account?.name ?? "")
                                 .font(MemoraStyle.title(26))
@@ -194,7 +205,7 @@ struct SettingsView: View {
                         }.buttonStyle(.plain)
                     }
                 }
-                Text("Memora para iOS · 0.5.0 (5) · Los archivos permanecen en este dispositivo.")
+                Text("Memora para iOS · 0.6.0 (8) · Los archivos permanecen en este dispositivo.")
                     .font(.caption).foregroundStyle(MemoraStyle.muted).padding(.top, 10)
             }
             .padding(MemoraStyle.pagePadding)
@@ -517,11 +528,54 @@ private struct AccountSettingsView: View {
     @ObservedObject var store: MemoryStore
     @State private var name = ""
     @State private var message: String?
+    @State private var selectedPhotoItem: PhotosPickerItem?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 MemoraHeader(title: "Información personal", subtitle: "Tu identidad dentro de Memora")
+
+                Panel {
+                    VStack(alignment: .center, spacing: 14) {
+                        if let photoData = store.account?.profilePhotoData,
+                           let uiImage = UIImage(data: photoData) {
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 84, height: 84)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(MemoraStyle.line, lineWidth: 1.5))
+                        } else {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.system(size: 84, weight: .ultraLight))
+                                .foregroundStyle(MemoraStyle.cream)
+                        }
+
+                        HStack(spacing: 12) {
+                            PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                                Label("Cambiar foto", systemImage: "photo.badge.plus")
+                            }
+                            .buttonStyle(MemoraButtonStyle())
+
+                            if store.account?.profilePhotoData != nil {
+                                Button(role: .destructive) {
+                                    do {
+                                        try store.removeProfilePhoto()
+                                        message = "Foto de perfil eliminada."
+                                    } catch {
+                                        message = error.localizedDescription
+                                    }
+                                } label: {
+                                    Text("Eliminar")
+                                }
+                                .buttonStyle(MemoraButtonStyle())
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+
                 Panel {
                     VStack(alignment: .leading, spacing: 12) {
                         TextField("Nombre", text: $name)
@@ -537,6 +591,19 @@ private struct AccountSettingsView: View {
                 .buttonStyle(MemoraButtonStyle(prominent: true))
                 if let message { Text(message).font(.caption).foregroundStyle(MemoraStyle.muted) }
             }.padding(MemoraStyle.pagePadding)
+        }
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                    do {
+                        try store.updateProfilePhoto(data: data)
+                        message = "Foto de perfil actualizada."
+                    } catch {
+                        message = error.localizedDescription
+                    }
+                }
+            }
         }
         .onAppear { name = store.account?.name ?? "" }
         .navigationBarTitleDisplayMode(.inline).memoraPage()

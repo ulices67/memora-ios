@@ -224,6 +224,7 @@ struct LibraryView: View {
 struct AlbumTile: View {
     @ObservedObject var store: MemoryStore
     let album: MemoryAlbum
+    @State private var isTargeted = false
 
     private var contents: [MemoryAsset] {
         store.activeAssets.filter { $0.albumIDs.contains(album.id) }
@@ -248,6 +249,20 @@ struct AlbumTile: View {
                 .lineLimit(1)
                 .foregroundStyle(MemoraStyle.muted)
         }
+        .padding(4)
+        .background(isTargeted ? MemoraStyle.cream.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 14))
+        .draggable(album.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in
+            for item in items {
+                if let assetID = UUID(uuidString: item) {
+                    try? store.addAssets([assetID], toAlbum: album.id)
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                }
+            }
+            return true
+        } isTargeted: { targeted in
+            isTargeted = targeted
+        }
     }
 }
 
@@ -271,6 +286,7 @@ struct AssetGrid: View {
                     MemoryCard(asset: asset, image: store.thumbnail(for: asset, secure: secure))
                 }
                 .buttonStyle(.plain)
+                .draggable(asset.id.uuidString)
             }
         }
     }
@@ -280,25 +296,128 @@ struct AlbumDetailView: View {
     @ObservedObject var store: MemoryStore
     let album: MemoryAlbum
     var secure = false
+    @State private var showingAddPhotos = false
+    @State private var isDropTargeted = false
 
     private var assets: [MemoryAsset] {
         (secure ? store.privateLibrary?.assets ?? [] : store.activeAssets)
             .filter { $0.albumIDs.contains(album.id) }
     }
 
+    private var availableAssets: [MemoryAsset] {
+        store.activeAssets.filter { !$0.albumIDs.contains(album.id) }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                MemoraHeader(title: album.name, subtitle: "\(assets.count) elementos")
+                MemoraHeader(title: album.name, subtitle: "\(assets.count) elementos · Arrastra fotos aquí")
+
+                HStack(spacing: 8) {
+                    Button {
+                        showingAddPhotos = true
+                    } label: {
+                        Label("Añadir de la biblioteca", systemImage: "plus.rectangle.on.rectangle")
+                    }
+                    .buttonStyle(MemoraButtonStyle(prominent: true))
+
+                    ImportActions(store: store, secure: secure)
+                }
+
+                if isDropTargeted {
+                    Panel {
+                        Label("Suelta los archivos para añadirlos a este álbum", systemImage: "arrow.down.doc.fill")
+                            .foregroundStyle(MemoraStyle.cream)
+                    }
+                }
+
                 if assets.isEmpty {
                     EmptyMemory(symbol: "photo.stack", title: "Álbum vacío",
-                                message: "Abre un archivo y asígnalo a este álbum.")
-                } else { AssetGrid(store: store, assets: assets, secure: secure) }
+                                message: "Arrastra archivos aquí o toca 'Añadir de la biblioteca' para organizarlos.")
+                } else {
+                    AssetGrid(store: store, assets: assets, secure: secure)
+                }
             }
             .padding(MemoraStyle.pagePadding)
         }
+        .dropDestination(for: String.self) { items, _ in
+            for item in items {
+                if let assetID = UUID(uuidString: item) {
+                    try? store.addAssets([assetID], toAlbum: album.id)
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                }
+            }
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        .sheet(isPresented: $showingAddPhotos) {
+            AddToAlbumSheet(store: store, album: album, available: availableAssets)
+        }
         .navigationBarTitleDisplayMode(.inline)
         .memoraPage()
+    }
+}
+
+struct AddToAlbumSheet: View {
+    @ObservedObject var store: MemoryStore
+    let album: MemoryAlbum
+    let available: [MemoryAsset]
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedIDs: Set<UUID> = []
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Selecciona recuerdos para añadir a '\(album.name)'")
+                        .font(.subheadline).foregroundStyle(MemoraStyle.muted)
+
+                    if available.isEmpty {
+                        EmptyMemory(symbol: "checkmark.circle", title: "Todo asignado",
+                                    message: "No hay más archivos sueltos en la biblioteca.")
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 90, maximum: 120), spacing: 6)], spacing: 6) {
+                            ForEach(available) { asset in
+                                ZStack(alignment: .topTrailing) {
+                                    MemoryCard(asset: asset, image: store.thumbnail(for: asset))
+                                        .opacity(selectedIDs.contains(asset.id) ? 0.7 : 1.0)
+                                    if selectedIDs.contains(asset.id) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.title3)
+                                            .foregroundStyle(MemoraStyle.cream)
+                                            .padding(6)
+                                    }
+                                }
+                                .onTapGesture {
+                                    if selectedIDs.contains(asset.id) {
+                                        selectedIDs.remove(asset.id)
+                                    } else {
+                                        selectedIDs.insert(asset.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(MemoraStyle.pagePadding)
+            }
+            .navigationTitle("Añadir a álbum")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancelar") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Añadir (\(selectedIDs.count))") {
+                        try? store.addAssets(Array(selectedIDs), toAlbum: album.id)
+                        dismiss()
+                    }
+                    .disabled(selectedIDs.isEmpty)
+                }
+            }
+            .memoraPage()
+        }
     }
 }
 
@@ -394,6 +513,20 @@ struct SectionRowView: View {
         .navigationDestination(isPresented: $showDetail) {
             SectionDetailView(store: store, section: section)
         }
+        .dropDestination(for: String.self) { items, _ in
+            for item in items {
+                if let droppedID = UUID(uuidString: item) {
+                    if store.library.albums.contains(where: { $0.id == droppedID }) {
+                        try? store.assignAlbum(droppedID, toSection: section.id)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    } else if store.activeAssets.contains(where: { $0.id == droppedID }) {
+                        try? store.addAssets([droppedID], toSection: section.id)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    }
+                }
+            }
+            return true
+        }
         .alert("Renombrar sección", isPresented: $showRenameAlert) {
             TextField("Nombre", text: $renameText)
             Button("Guardar") {
@@ -418,29 +551,51 @@ struct SectionDetailView: View {
     let section: MemorySection
     @State private var addingAlbum = false
     @State private var albumName = ""
+    @State private var showingAddFiles = false
+    @State private var isDropTargeted = false
 
     private var albums: [MemoryAlbum] { store.albums(in: section) }
     private var assets: [MemoryAsset] { store.assets(in: section) }
+    private var availableAssets: [MemoryAsset] {
+        let sectionAlbumIDs = Set(albums.map(\.id))
+        return store.activeAssets.filter { asset in
+            !asset.albumIDs.contains(where: { sectionAlbumIDs.contains($0) })
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 MemoraHeader(
                     title: section.name,
-                    subtitle: "\(albums.count) álbumes · \(assets.count) recuerdos asociados"
+                    subtitle: "\(albums.count) álbumes · \(assets.count) recuerdos asociados · Arrastra álbumes o fotos aquí"
                 )
 
-                HStack {
-                    SectionHeading(title: "Álbumes de la sección")
-                    Button { addingAlbum = true } label: { Image(systemName: "plus.circle") }
-                        .accessibilityLabel("Nuevo álbum en esta sección")
+                HStack(spacing: 8) {
+                    Button { addingAlbum = true } label: {
+                        Label("Nuevo álbum", systemImage: "plus.rectangle.on.rectangle")
+                    }
+                    .buttonStyle(MemoraButtonStyle(prominent: true))
+
+                    Button { showingAddFiles = true } label: {
+                        Label("Añadir archivos", systemImage: "photo.badge.plus")
+                    }
+                    .buttonStyle(MemoraButtonStyle())
                 }
 
+                if isDropTargeted {
+                    Panel {
+                        Label("Suelta aquí para añadir este álbum o recuerdo a '\(section.name)'", systemImage: "arrow.down.doc.fill")
+                            .foregroundStyle(MemoraStyle.cream)
+                    }
+                }
+
+                SectionHeading(title: "Álbumes de la sección")
                 if albums.isEmpty {
                     EmptyMemory(
                         symbol: "rectangle.stack.badge.plus",
                         title: "Sin álbumes en esta sección",
-                        message: "Crea un álbum dentro de '\(section.name)' para agrupar recuerdos afines."
+                        message: "Arrastra un álbum existente aquí o toca 'Nuevo álbum' para agrupar recuerdos afines."
                     )
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)], spacing: 12) {
@@ -460,13 +615,32 @@ struct SectionDetailView: View {
                     EmptyMemory(
                         symbol: "photo.stack",
                         title: "No hay archivos asignados",
-                        message: "Los archivos que pertenezcan a los álbumes de esta sección aparecerán aquí."
+                        message: "Arrastra fotos aquí para asociarlas a esta sección."
                     )
                 } else {
                     AssetGrid(store: store, assets: assets)
                 }
             }
             .padding(MemoraStyle.pagePadding)
+        }
+        .dropDestination(for: String.self) { items, _ in
+            for item in items {
+                if let droppedID = UUID(uuidString: item) {
+                    if store.library.albums.contains(where: { $0.id == droppedID }) {
+                        try? store.assignAlbum(droppedID, toSection: section.id)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    } else if store.activeAssets.contains(where: { $0.id == droppedID }) {
+                        try? store.addAssets([droppedID], toSection: section.id)
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    }
+                }
+            }
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        .sheet(isPresented: $showingAddFiles) {
+            AddToSectionSheet(store: store, section: section, available: availableAssets)
         }
         .alert("Nuevo álbum en \(section.name)", isPresented: $addingAlbum) {
             TextField("Nombre del álbum", text: $albumName)
@@ -485,6 +659,68 @@ struct SectionDetailView: View {
     }
 }
 
+struct AddToSectionSheet: View {
+    @ObservedObject var store: MemoryStore
+    let section: MemorySection
+    let available: [MemoryAsset]
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedIDs: Set<UUID> = []
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Selecciona recuerdos para incorporar a la sección '\(section.name)'")
+                        .font(.subheadline).foregroundStyle(MemoraStyle.muted)
+
+                    if available.isEmpty {
+                        EmptyMemory(symbol: "checkmark.circle", title: "Todo asignado",
+                                    message: "Todos tus archivos activos ya forman parte de esta sección.")
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 90, maximum: 120), spacing: 6)], spacing: 6) {
+                            ForEach(available) { asset in
+                                ZStack(alignment: .topTrailing) {
+                                    MemoryCard(asset: asset, image: store.thumbnail(for: asset))
+                                        .opacity(selectedIDs.contains(asset.id) ? 0.7 : 1.0)
+                                    if selectedIDs.contains(asset.id) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .font(.title3)
+                                            .foregroundStyle(MemoraStyle.cream)
+                                            .padding(6)
+                                    }
+                                }
+                                .onTapGesture {
+                                    if selectedIDs.contains(asset.id) {
+                                        selectedIDs.remove(asset.id)
+                                    } else {
+                                        selectedIDs.insert(asset.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(MemoraStyle.pagePadding)
+            }
+            .navigationTitle("Añadir a sección")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancelar") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Añadir (\(selectedIDs.count))") {
+                        try? store.addAssets(Array(selectedIDs), toSection: section.id)
+                        dismiss()
+                    }
+                    .disabled(selectedIDs.isEmpty)
+                }
+            }
+            .memoraPage()
+        }
+    }
+}
+
 struct AssetDetailView: View {
     @ObservedObject var store: MemoryStore
     let assetID: UUID
@@ -492,6 +728,9 @@ struct AssetDetailView: View {
     @State private var temporary: URL?
     @State private var showingPreview = false
     @State private var showingShare = false
+    @State private var locationText = ""
+    @State private var newTagText = ""
+    @State private var localTags: [String] = []
 
     private var asset: MemoryAsset? {
         if secure {
@@ -518,6 +757,7 @@ struct AssetDetailView: View {
                         .minimumScaleFactor(0.8)
                     Text("\(asset.size.memorySize) · \(asset.addedAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption).foregroundStyle(MemoraStyle.muted)
+
                     VStack(spacing: 10) {
                         Button {
                             do {
@@ -538,6 +778,112 @@ struct AssetDetailView: View {
                         }
                         .buttonStyle(MemoraButtonStyle())
                     }
+
+                    if !secure {
+                        SectionHeading(title: "Ubicación")
+                        Panel {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Image(systemName: "mappin.and.ellipse")
+                                        .foregroundStyle(MemoraStyle.cream)
+                                    TextField("Añadir o editar ubicación…", text: $locationText)
+                                        .textFieldStyle(.plain)
+                                        .onSubmit { saveMetadata() }
+                                    if locationText != asset.location {
+                                        Button("Guardar") { saveMetadata() }
+                                            .font(.caption.bold())
+                                            .foregroundStyle(.mint)
+                                    }
+                                }
+                                if let lat = asset.latitude, let lon = asset.longitude {
+                                    Text(String(format: "GPS: %.4f°, %.4f°", lat, lon))
+                                        .font(.caption2)
+                                        .foregroundStyle(MemoraStyle.muted)
+                                }
+                            }
+                        }
+
+                        SectionHeading(title: "Etiquetas")
+                        Panel {
+                            VStack(alignment: .leading, spacing: 10) {
+                                if !localTags.isEmpty {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 8) {
+                                            ForEach(localTags, id: \.self) { tag in
+                                                HStack(spacing: 5) {
+                                                    Text("#\(tag)").font(.caption).foregroundStyle(MemoraStyle.cream)
+                                                    Button {
+                                                        localTags.removeAll { $0 == tag }
+                                                        saveMetadata()
+                                                    } label: {
+                                                        Image(systemName: "xmark.circle.fill").font(.caption2).foregroundStyle(MemoraStyle.muted)
+                                                    }
+                                                }
+                                                .padding(.horizontal, 10)
+                                                .padding(.vertical, 5)
+                                                .background(MemoraStyle.line, in: Capsule())
+                                            }
+                                        }
+                                    }
+                                }
+                                HStack {
+                                    Image(systemName: "tag").foregroundStyle(MemoraStyle.cream)
+                                    TextField("Nueva etiqueta…", text: $newTagText)
+                                        .textFieldStyle(.plain)
+                                        .onSubmit { addTag() }
+                                    if !newTagText.trimmingCharacters(in: .whitespaces).isEmpty {
+                                        Button("Añadir") { addTag() }
+                                            .font(.caption.bold())
+                                            .foregroundStyle(.mint)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if asset.cameraModel != nil || asset.iso != nil || asset.aperture != nil || asset.focalLength != nil || asset.width != nil {
+                        SectionHeading(title: "Detalles técnicos")
+                        Panel {
+                            VStack(alignment: .leading, spacing: 10) {
+                                if let camera = asset.cameraModel {
+                                    HStack {
+                                        Label(camera, systemImage: "camera")
+                                            .font(.subheadline)
+                                        Spacer()
+                                    }
+                                }
+                                if let w = asset.width, let h = asset.height {
+                                    HStack {
+                                        Label("\(w) × \(h) px", systemImage: "aspectratio")
+                                            .font(.caption)
+                                            .foregroundStyle(MemoraStyle.muted)
+                                        Spacer()
+                                    }
+                                }
+                                HStack(spacing: 14) {
+                                    if let iso = asset.iso {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("ISO").font(.caption2).foregroundStyle(MemoraStyle.muted)
+                                            Text("\(iso)").font(.system(.subheadline, design: .monospaced).bold())
+                                        }
+                                    }
+                                    if let f = asset.aperture {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("APERTURA").font(.caption2).foregroundStyle(MemoraStyle.muted)
+                                            Text(String(format: "ƒ/%.1f", f)).font(.system(.subheadline, design: .monospaced).bold())
+                                        }
+                                    }
+                                    if let focal = asset.focalLength {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("FOCAL").font(.caption2).foregroundStyle(MemoraStyle.muted)
+                                            Text(String(format: "%.0f mm", focal)).font(.system(.subheadline, design: .monospaced).bold())
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if !secure {
                         VStack(spacing: 10) {
                             Button {
@@ -576,6 +922,12 @@ struct AssetDetailView: View {
                 .padding(MemoraStyle.pagePadding)
             }
         }
+        .onAppear {
+            if let asset {
+                locationText = asset.location
+                localTags = asset.tags
+            }
+        }
         .sheet(isPresented: $showingPreview, onDismiss: cleanup) {
             if let temporary { FilePreview(url: temporary) }
         }
@@ -584,6 +936,25 @@ struct AssetDetailView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .memoraPage()
+    }
+
+    private func saveMetadata() {
+        guard !secure else { return }
+        do {
+            try store.updateAssetMetadata(id: assetID, location: locationText, tags: localTags)
+        } catch {
+            store.notice = error.localizedDescription
+        }
+    }
+
+    private func addTag() {
+        let trimmed = newTagText.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
+        guard !trimmed.isEmpty else { return }
+        if !localTags.contains(trimmed) {
+            localTags.append(trimmed)
+            saveMetadata()
+        }
+        newTagText = ""
     }
 
     private func cleanup() {
@@ -627,41 +998,165 @@ struct PeopleView: View {
     @ObservedObject var store: MemoryStore
     @State private var name = ""
     @State private var adding = false
+    @State private var selectedTab = 0
+    @State private var namingCluster: FaceCluster?
+    @State private var clusterPersonName = ""
+
+    private var reviewCount: Int {
+        store.library.detectedFaces.filter { $0.reviewStatus == .suggested }.count
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                MemoraHeader(title: "Personas", subtitle: "Las personas que forman tu historia")
-                Button { adding = true } label: { Label("Añadir persona", systemImage: "plus") }
-                    .buttonStyle(MemoraButtonStyle(prominent: true))
-                if store.library.people.isEmpty {
-                    EmptyMemory(symbol: "person.2", title: "Ponle nombre a tus recuerdos",
-                                message: "Crea personas y asígnalas manualmente. El reconocimiento facial aún no está integrado.")
-                }
-                ForEach(store.library.people) { person in
-                    NavigationLink {
-                        PersonDetailView(store: store, person: person)
+                MemoraHeader(title: "Personas", subtitle: "Reconocimiento facial y agrupaciones locales")
+
+                HStack(spacing: 10) {
+                    Button { adding = true } label: { Label("Nueva persona", systemImage: "plus") }
+                        .buttonStyle(MemoraButtonStyle(prominent: true))
+
+                    Button {
+                        store.recomputeClusters()
                     } label: {
-                        Panel {
-                            HStack(spacing: 14) {
-                                Image(systemName: "person.crop.circle")
-                                    .font(.system(size: 38, weight: .ultraLight))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(person.name)
-                                        .font(MemoraStyle.title(22))
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.85)
-                                    Text("\(store.activeAssets.filter { $0.personIDs.contains(person.id) }.count) archivos")
-                                        .font(.caption).foregroundStyle(MemoraStyle.muted)
+                        Label("Reanalizar", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(MemoraButtonStyle())
+                }
+
+                Picker("Categoría", selection: $selectedTab) {
+                    Text("Todas (\(store.library.people.count))").tag(0)
+                    Text("Sin identificar (\(store.library.clusters.count))").tag(1)
+                    Text("Revisar (\(reviewCount))").tag(2)
+                }
+                .pickerStyle(.segmented)
+
+                if selectedTab == 0 {
+                    if store.library.people.isEmpty {
+                        EmptyMemory(symbol: "person.2", title: "Ponle nombre a tus recuerdos",
+                                    message: "Crea personas o asígnales nombre desde las agrupaciones automáticas de rostros.")
+                    }
+                    ForEach(store.library.people) { person in
+                        NavigationLink {
+                            PersonDetailView(store: store, person: person)
+                        } label: {
+                            Panel {
+                                HStack(spacing: 14) {
+                                    Image(systemName: "person.crop.circle")
+                                        .font(.system(size: 38, weight: .ultraLight))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(person.name)
+                                            .font(MemoraStyle.title(22))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.85)
+                                        Text("\(store.activeAssets.filter { $0.personIDs.contains(person.id) }.count) archivos")
+                                            .font(.caption).foregroundStyle(MemoraStyle.muted)
+                                    }
+                                    Spacer()
+                                    if !person.reviewCandidateAssetIDs.isEmpty {
+                                        Text("\(person.reviewCandidateAssetIDs.count) para revisar")
+                                            .font(.caption2.bold())
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.orange.opacity(0.2), in: Capsule())
+                                            .foregroundStyle(.orange)
+                                    }
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption)
+                                        .foregroundStyle(MemoraStyle.muted)
                                 }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption)
-                                    .foregroundStyle(MemoraStyle.muted)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                } else if selectedTab == 1 {
+                    if store.library.clusters.isEmpty {
+                        EmptyMemory(symbol: "person.crop.circle.badge.checkmark",
+                                    title: "No hay rostros sin identificar",
+                                    message: "Todos los rostros detectados han sido nombrados o no cumplen el Quality Gate.")
+                    } else {
+                        ForEach(store.library.clusters) { cluster in
+                            Panel {
+                                HStack(spacing: 14) {
+                                    Image(systemName: "person.crop.rectangle.stack")
+                                        .font(.system(size: 32, weight: .ultraLight))
+                                        .foregroundStyle(MemoraStyle.cream)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Grupo con \(cluster.faceIDs.count) fotos")
+                                            .font(MemoraStyle.title(18))
+                                        Text("Rostros similares encontrados localmente")
+                                            .font(.caption).foregroundStyle(MemoraStyle.muted)
+                                    }
+                                    Spacer()
+                                    Button("Nombrar") {
+                                        clusterPersonName = cluster.suggestedName ?? ""
+                                        namingCluster = cluster
+                                    }
+                                    .buttonStyle(MemoraButtonStyle(prominent: true))
+                                }
                             }
                         }
                     }
-                    .buttonStyle(.plain)
+                } else {
+                    let suggested = store.library.detectedFaces.filter { $0.reviewStatus == .suggested }
+                    if suggested.isEmpty {
+                        EmptyMemory(symbol: "checkmark.circle",
+                                    title: "Todo al día",
+                                    message: "No hay coincidencias en zona de duda pendientes de confirmación.")
+                    } else {
+                        ForEach(suggested) { face in
+                            Panel {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack {
+                                        if let asset = store.library.assets.first(where: { $0.id == face.assetID }),
+                                           let thumb = store.thumbnail(for: asset) {
+                                            Image(uiImage: thumb)
+                                                .resizable()
+                                                .scaledToFill()
+                                                .frame(width: 50, height: 50)
+                                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                        }
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            if let pID = face.personID, let person = store.library.people.first(where: { $0.id == pID }) {
+                                                Text("¿Es \(person.name)?")
+                                                    .font(MemoraStyle.title(18))
+                                            } else {
+                                                Text("Coincidencia sugerida")
+                                                    .font(MemoraStyle.title(18))
+                                            }
+                                            Text(String(format: "Confianza: %.0f%% · Zona de revisión", face.confidence * 100))
+                                                .font(.caption)
+                                                .foregroundStyle(.orange)
+                                        }
+                                        Spacer()
+                                    }
+                                    HStack(spacing: 10) {
+                                        if let pID = face.personID {
+                                            Button("Confirmar") {
+                                                do {
+                                                    try store.confirmFaceReview(faceID: face.id, personID: pID)
+                                                } catch {
+                                                    store.notice = error.localizedDescription
+                                                }
+                                            }
+                                            .buttonStyle(MemoraButtonStyle(prominent: true))
+                                        }
+                                        Menu("Asignar a otra") {
+                                            ForEach(store.library.people) { other in
+                                                Button(other.name) {
+                                                    do {
+                                                        try store.correctFace(faceID: face.id, correctPersonID: other.id)
+                                                    } catch {
+                                                        store.notice = error.localizedDescription
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .buttonStyle(MemoraButtonStyle())
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .padding(MemoraStyle.pagePadding)
@@ -673,6 +1168,27 @@ struct PeopleView: View {
                 catch { store.notice = error.localizedDescription }
             }
             Button("Cancelar", role: .cancel) { name = "" }
+        }
+        .alert("Nombrar grupo de rostros", isPresented: Binding(
+            get: { namingCluster != nil },
+            set: { if !$0 { namingCluster = nil } }
+        )) {
+            TextField("Nombre de la persona", text: $clusterPersonName)
+            Button("Guardar") {
+                if let cluster = namingCluster {
+                    do {
+                        try store.nameCluster(cluster.id, name: clusterPersonName)
+                    } catch {
+                        store.notice = error.localizedDescription
+                    }
+                }
+                namingCluster = nil
+                clusterPersonName = ""
+            }
+            Button("Cancelar", role: .cancel) {
+                namingCluster = nil
+                clusterPersonName = ""
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .memoraPage()
@@ -687,6 +1203,23 @@ struct PersonDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 MemoraHeader(title: person.name, subtitle: "Recuerdos etiquetados")
+
+                if !person.reviewCandidateAssetIDs.isEmpty {
+                    Panel {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Image(systemName: "person.crop.circle.badge.questionmark")
+                                    .foregroundStyle(.orange)
+                                Text("\(person.reviewCandidateAssetIDs.count) fotos por confirmar")
+                                    .font(MemoraStyle.title(16))
+                                    .foregroundStyle(.orange)
+                            }
+                            Text("Face Engine v2 identificó posibles recuerdos con coincidencia moderada.")
+                                .font(.caption).foregroundStyle(MemoraStyle.muted)
+                        }
+                    }
+                }
+
                 Menu("Combinar con otra persona") {
                     ForEach(store.library.people.filter { $0.id != person.id }) { target in
                         Button("Combinar en \(target.name)") {
@@ -696,6 +1229,7 @@ struct PersonDetailView: View {
                     }
                 }
                 .buttonStyle(MemoraButtonStyle())
+
                 let assets = store.activeAssets.filter { $0.personIDs.contains(person.id) }
                 if assets.isEmpty {
                     EmptyMemory(symbol: "person.crop.rectangle", title: "Sin archivos asignados",
@@ -711,6 +1245,11 @@ struct PersonDetailView: View {
 struct SearchView: View {
     @ObservedObject var store: MemoryStore
     @State private var query = ""
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var queryImage: UIImage?
+    @State private var isSearchingByPhoto = false
+    @State private var photoSearchResults: [FaceMatchResult] = []
+    @State private var hasSearchedPhoto = false
 
     private var results: [MemoryAsset] {
         let words = query.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
@@ -729,24 +1268,145 @@ struct SearchView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 MemoraHeader(title: "Buscar", subtitle: "Encuentra personas, lugares y momentos")
+
                 TextField("Buscar en tu biblioteca…", text: $query)
                     .textFieldStyle(.roundedBorder)
+
                 Panel {
-                    MemoryRow(symbol: "faceid", title: "Buscar mediante fotografía",
-                              detail: "Disponible tras integrar reconocimiento local")
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Image(systemName: "faceid")
+                                .font(.title2)
+                                .foregroundStyle(MemoraStyle.cream)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Buscar mediante fotografía")
+                                    .font(MemoraStyle.title(18))
+                                Text("Reconocimiento local · Face Engine v2")
+                                    .font(.caption)
+                                    .foregroundStyle(MemoraStyle.muted)
+                            }
+                            Spacer()
+                            PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                                Label(queryImage == nil ? "Elegir foto" : "Cambiar", systemImage: "photo.badge.plus")
+                                    .font(.caption.bold())
+                            }
+                            .buttonStyle(MemoraButtonStyle())
+                        }
+
+                        if let queryImage {
+                            HStack(spacing: 12) {
+                                Image(uiImage: queryImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 52, height: 52)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(MemoraStyle.line, lineWidth: 1))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if isSearchingByPhoto {
+                                        HStack(spacing: 6) {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                            Text("Analizando rostros…")
+                                                .font(.caption)
+                                                .foregroundStyle(MemoraStyle.muted)
+                                        }
+                                    } else {
+                                        Text("\(photoSearchResults.count) persona(s) evaluada(s)")
+                                            .font(.caption.bold())
+                                        Button("Limpiar foto") {
+                                            self.queryImage = nil
+                                            self.photoSearchResults = []
+                                            self.hasSearchedPhoto = false
+                                            self.selectedPhotoItem = nil
+                                        }
+                                        .font(.caption2)
+                                        .foregroundStyle(.red)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.top, 4)
+                        }
+                    }
                 }
-                if query.isEmpty {
+
+                if hasSearchedPhoto && !isSearchingByPhoto {
+                    if photoSearchResults.isEmpty {
+                        EmptyMemory(symbol: "person.crop.circle.badge.questionmark",
+                                    title: "Sin rostros identificables",
+                                    message: "No se detectaron rostros con suficiente calidad en esta fotografía.")
+                    } else {
+                        SectionHeading(title: "Coincidencias faciales encontradas")
+                        ForEach(photoSearchResults) { match in
+                            NavigationLink {
+                                PersonDetailView(store: store, person: match.person)
+                            } label: {
+                                Panel {
+                                    HStack(spacing: 14) {
+                                        Image(systemName: "person.crop.circle")
+                                            .font(.system(size: 38, weight: .ultraLight))
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack {
+                                                Text(match.person.name)
+                                                    .font(MemoraStyle.title(20))
+                                                    .lineLimit(1)
+                                                Spacer()
+                                                Text(String(format: "%.0f%%", match.confidence * 100))
+                                                    .font(.system(.subheadline, design: .monospaced).bold())
+                                                    .foregroundStyle(match.zone == .high ? .mint : (match.zone == .review ? .orange : MemoraStyle.muted))
+                                            }
+                                            HStack {
+                                                Text(match.zone.rawValue)
+                                                    .font(.caption2.bold())
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(
+                                                        (match.zone == .high ? Color.mint.opacity(0.15) : (match.zone == .review ? Color.orange.opacity(0.15) : MemoraStyle.surfaceElevated)),
+                                                        in: Capsule()
+                                                    )
+                                                    .foregroundStyle(match.zone == .high ? .mint : (match.zone == .review ? .orange : MemoraStyle.muted))
+                                                Spacer()
+                                                Text("\(match.assetCount) fotos · \(match.albumCount) álbumes")
+                                                    .font(.caption)
+                                                    .foregroundStyle(MemoraStyle.muted)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if query.isEmpty && !hasSearchedPhoto {
                     EmptyMemory(symbol: "magnifyingglass", title: "Tu biblioteca, a un toque",
-                                message: "Busca por nombre, álbum, persona, etiqueta o tipo de archivo.")
-                } else if results.isEmpty {
-                    EmptyMemory(symbol: "magnifyingglass", title: "Sin coincidencias",
-                                message: "Prueba con otro nombre o etiqueta.")
-                } else {
-                    SectionHeading(title: "Resultados")
-                    AssetGrid(store: store, assets: results)
+                                message: "Busca por nombre, álbum, persona, etiqueta o elige una foto para buscar rostros.")
+                } else if !query.isEmpty {
+                    if results.isEmpty {
+                        EmptyMemory(symbol: "magnifyingglass", title: "Sin coincidencias",
+                                    message: "Prueba con otro nombre o etiqueta.")
+                    } else {
+                        SectionHeading(title: "Resultados de texto")
+                        AssetGrid(store: store, assets: results)
+                    }
                 }
             }
             .padding(MemoraStyle.pagePadding)
+        }
+        .onChange(of: selectedPhotoItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let img = UIImage(data: data) {
+                    queryImage = img
+                    isSearchingByPhoto = true
+                    hasSearchedPhoto = true
+                    let matches = await store.searchPeopleByPhoto(image: img)
+                    photoSearchResults = matches
+                    isSearchingByPhoto = false
+                }
+            }
         }
         .toolbar(.hidden, for: .navigationBar)
         .memoraPage()

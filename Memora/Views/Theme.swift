@@ -215,7 +215,8 @@ struct MemoraButtonStyle: ButtonStyle {
 
 extension View {
     func memoraPage() -> some View {
-        background(MemoraBackground())
+        frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MemoraBackground())
             .preferredColorScheme(.dark)
             .tint(MemoraStyle.cream)
     }

@@ -8,17 +8,26 @@ struct MemoraApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if store.authenticated {
-                    if store.recoveryCode != nil {
-                        RecoveryCodeView(store: store)
+            ZStack {
+                MemoraStyle.background
+                    .ignoresSafeArea()
+
+                Group {
+                    if store.authenticated {
+                        if store.recoveryCode != nil {
+                            RecoveryCodeView(store: store)
+                        } else {
+                            MainTabs(store: store)
+                        }
                     } else {
-                        MainTabs(store: store)
+                        AuthView(store: store)
                     }
-                } else {
-                    AuthView(store: store)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(MemoraStyle.background.ignoresSafeArea())
+            .preferredColorScheme(.dark)
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { store.lockVault() }
             }

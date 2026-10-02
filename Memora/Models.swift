@@ -76,11 +76,22 @@ struct MemoryPerson: Identifiable, Codable, Hashable {
     var name: String
     var coverAssetID: UUID?
     var prototype: [Float]? = nil
+    var prototypes: [[Float]]? = nil
     var exemplarFaceIDs: [UUID] = []
     var reviewCandidateAssetIDs: [UUID] = []
+
+    var allPrototypes: [[Float]] {
+        if let protos = prototypes, !protos.isEmpty {
+            return protos
+        }
+        if let single = prototype {
+            return [single]
+        }
+        return []
+    }
 }
 
-// MARK: - Modelos de Face Engine v2
+// MARK: - Modelos de Face Engine 2.0
 struct FaceBoundingBox: Codable, Hashable {
     var x: Double
     var y: Double
@@ -94,6 +105,16 @@ enum FaceReviewStatus: String, Codable, Hashable {
     case unassigned
 }
 
+struct FaceDescriptor {
+    let embedding: [Float]
+    let quality: Double
+    let yaw: Double
+    let pitch: Double
+    let roll: Double
+    let boundingBox: CGRect
+    let sourceAssetID: UUID
+}
+
 struct DetectedFace: Identifiable, Codable, Hashable {
     var id: UUID
     var assetID: UUID
@@ -103,6 +124,9 @@ struct DetectedFace: Identifiable, Codable, Hashable {
     var personID: UUID?
     var confidence: Double
     var reviewStatus: FaceReviewStatus = .unassigned
+    var yaw: Double? = nil
+    var pitch: Double? = nil
+    var roll: Double? = nil
 }
 
 struct FaceCluster: Identifiable, Codable, Hashable {

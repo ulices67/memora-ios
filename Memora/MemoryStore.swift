@@ -747,26 +747,35 @@ final class MemoryStore: ObservableObject {
         let faces = await FaceEngine.analyzeImage(image, assetID: assetID)
         guard !faces.isEmpty else { return }
 
-        for face in faces {
-            library.detectedFaces.removeAll { $0.id == face.id }
-            var faceToAdd = face
+        // FaceEngine 2.0: Resolución multi-rostro para evitar identidades duplicadas en una misma foto
+        let resolved = FaceEngine.classifyAndResolveFaces(faces, against: library.people, facesCatalog: facesCatalog)
 
-            if face.quality >= FaceEngine.qualityGateMinimum {
-                let classification = FaceEngine.classifyFace(face, against: library.people, facesCatalog: facesCatalog)
-                if let matchedPersonID = classification.personID {
-                    if classification.zone == .high {
-                        faceToAdd.personID = matchedPersonID
-                        faceToAdd.confidence = classification.confidence
-                        faceToAdd.reviewStatus = .confirmed
-                        try? assign(assetID, to: matchedPersonID)
-                    } else if classification.zone == .review {
-                        faceToAdd.personID = matchedPersonID
-                        faceToAdd.confidence = classification.confidence
-                        faceToAdd.reviewStatus = .suggested
+        for item in resolved {
+            var faceToAdd = item.face
+            library.detectedFaces.removeAll { $0.id == faceToAdd.id }
+
+            if let matchedPersonID = item.personID {
+                if item.zone == .high {
+                    faceToAdd.personID = matchedPersonID
+                    faceToAdd.confidence = item.confidence
+                    faceToAdd.reviewStatus = .confirmed
+                    try? assign(assetID, to: matchedPersonID)
+
+                    // Enrollment inteligente automático si cumple con calidad y diversidad
+                    if let person = library.people.first(where: { $0.id == matchedPersonID }),
+                       FaceEngine.shouldEnrollFace(faceToAdd, for: person, facesCatalog: facesCatalog) {
                         if let pIdx = library.people.firstIndex(where: { $0.id == matchedPersonID }) {
-                            if !library.people[pIdx].reviewCandidateAssetIDs.contains(assetID) {
-                                library.people[pIdx].reviewCandidateAssetIDs.append(assetID)
-                            }
+                            library.people[pIdx].exemplarFaceIDs.append(faceToAdd.id)
+                            updatePersonPrototype(personID: matchedPersonID)
+                        }
+                    }
+                } else if item.zone == .review {
+                    faceToAdd.personID = matchedPersonID
+                    faceToAdd.confidence = item.confidence
+                    faceToAdd.reviewStatus = .suggested
+                    if let pIdx = library.people.firstIndex(where: { $0.id == matchedPersonID }) {
+                        if !library.people[pIdx].reviewCandidateAssetIDs.contains(assetID) {
+                            library.people[pIdx].reviewCandidateAssetIDs.append(assetID)
                         }
                     }
                 }
@@ -822,6 +831,7 @@ final class MemoryStore: ObservableObject {
         let catalog = facesCatalog
         let embeddings: [[Float]] = library.people[pIdx].exemplarFaceIDs.compactMap { catalog[$0]?.embedding }
         library.people[pIdx].prototype = FaceEngine.computePrototype(from: embeddings)
+        library.people[pIdx].prototypes = FaceEngine.computeMultiPrototypes(from: embeddings)
     }
 
     func nameCluster(_ clusterID: UUID, name: String) throws {
@@ -936,28 +946,19 @@ final class MemoryStore: ObservableObject {
 
         for fIdx in library.detectedFaces.indices {
             let face = library.detectedFaces[fIdx]
-            guard face.personID != personID, face.quality >= FaceEngine.qualityGateMinimum else { continue }
-            
-            var scores: [Double] = []
-            if let proto = person.prototype {
-                scores.append(FaceEngine.cosineSimilarity(face.embedding, proto))
-            }
-            for exemplarID in person.exemplarFaceIDs.prefix(20) {
-                if let ex = catalog[exemplarID] {
-                    scores.append(FaceEngine.cosineSimilarity(face.embedding, ex.embedding))
-                }
-            }
-            let maxScore = scores.max() ?? 0.0
-            if maxScore >= FaceEngine.thresholdAccept {
-                library.detectedFaces[fIdx].personID = personID
-                library.detectedFaces[fIdx].confidence = maxScore
+            guard face.personID != personID, face.quality >= FaceEngine.recognitionGateMinimum else { continue }
+
+            let classification = FaceEngine.classifyFace(face, against: [person], facesCatalog: catalog)
+            if classification.zone == .high, let matchedID = classification.personID {
+                library.detectedFaces[fIdx].personID = matchedID
+                library.detectedFaces[fIdx].confidence = classification.confidence
                 library.detectedFaces[fIdx].reviewStatus = .confirmed
-                try? assign(face.assetID, to: personID)
-            } else if maxScore >= FaceEngine.thresholdReview {
-                library.detectedFaces[fIdx].personID = personID
-                library.detectedFaces[fIdx].confidence = maxScore
+                try? assign(face.assetID, to: matchedID)
+            } else if classification.zone == .review, let matchedID = classification.personID {
+                library.detectedFaces[fIdx].personID = matchedID
+                library.detectedFaces[fIdx].confidence = classification.confidence
                 library.detectedFaces[fIdx].reviewStatus = .suggested
-                if let pIdx = library.people.firstIndex(where: { $0.id == personID }) {
+                if let pIdx = library.people.firstIndex(where: { $0.id == matchedID }) {
                     if !library.people[pIdx].reviewCandidateAssetIDs.contains(face.assetID) {
                         library.people[pIdx].reviewCandidateAssetIDs.append(face.assetID)
                     }

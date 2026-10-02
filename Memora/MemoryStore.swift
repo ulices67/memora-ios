@@ -113,6 +113,14 @@ final class MemoryStore: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
             account = try read(AccountRecord.self, from: base.appendingPathComponent("account.json"))
+            
+            // Auto-restauración desde iCloud si no hay cuenta local
+            if account == nil, let activeEmail = CloudAccountStore.lastActiveEmail(),
+               let cloudAccount = CloudAccountStore.fetchAccount(email: activeEmail) {
+                account = cloudAccount
+                try? saveAccount()
+            }
+
             if UserDefaults.standard.object(forKey: persistentSessionPreference) != nil {
                 persistentSessionEnabled = UserDefaults.standard.bool(forKey: persistentSessionPreference)
             }
@@ -141,7 +149,7 @@ final class MemoryStore: ObservableObject {
     }
 
     var baseDirectory: URL { base }
-    var hasAccount: Bool { account != nil }
+    var hasAccount: Bool { account != nil || CloudAccountStore.lastActiveEmail() != nil }
     var vaultUnlocked: Bool { privateLibrary != nil && vaultKey != nil }
     var vaultConfigured: Bool { account?.wrappedVaultKey != nil }
     var biometricAvailable: Bool { BiometricAuth.available() }
@@ -151,6 +159,7 @@ final class MemoryStore: ObservableObject {
     var usedBytes: Int {
         library.assets.reduce(0) { $0 + $1.size } + (privateLibrary?.assets.reduce(0) { $0 + $1.size } ?? 0)
     }
+    var detectedCloudEmail: String? { CloudAccountStore.lastActiveEmail() }
 
     func requireRootKey() throws -> SymmetricKey {
         guard let rootKey else { throw MemoraError.noAccount }
@@ -176,6 +185,7 @@ final class MemoryStore: ObservableObject {
     private func saveAccount() throws {
         guard let account else { throw MemoraError.noAccount }
         try write(JSONEncoder().encode(account), to: accountURL)
+        CloudAccountStore.saveAccount(account)
     }
 
     private func normalized(_ email: String) -> String {
@@ -196,21 +206,21 @@ final class MemoryStore: ObservableObject {
     }
 
     func syncRecoveryCodeToCloud(email: String, code: String) {
-        let key = "memora.recovery.\(email)"
+        let key = "memora.recovery.\(email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
         NSUbiquitousKeyValueStore.default.set(code, forKey: key)
         NSUbiquitousKeyValueStore.default.synchronize()
     }
     
     func fetchRecoveryCodeFromCloud(email: String) -> String? {
-        let key = "memora.recovery.\(email)"
+        let key = "memora.recovery.\(email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
         return NSUbiquitousKeyValueStore.default.string(forKey: key)
     }
 
     func register(name: String, email input: String, password: String) throws -> String {
-        guard account == nil else {
-            throw MemoraError.invalidInput("Ya existe una cuenta local. Inicia sesión.")
-        }
         let email = normalized(input)
+        if let existing = account, existing.email == email {
+            throw MemoraError.invalidInput("Ya existe una cuenta con este correo. Inicia sesión.")
+        }
         try validate(name: name, email: email, password: password)
         let root = MemoraCrypto.randomKey()
         let recovery = try MemoraCrypto.randomData(32)
@@ -235,6 +245,7 @@ final class MemoryStore: ObservableObject {
         try saveLibrary()
         authenticated = true
         try? persistSessionIfEnabled()
+        try? BiometricAccountKey.save(root, email: email)
         let code = MemoraCrypto.recoveryString(recovery)
         recoveryCode = code
         syncRecoveryCodeToCloud(email: email, code: code)
@@ -244,41 +255,19 @@ final class MemoryStore: ObservableObject {
     func login(email input: String, password: String) throws {
         let normalizedEmail = normalized(input)
         
-        // --- PARCHE 0.5.0: Soporte activo en la nube (Cloudflare) ---
-        // Esto consulta la base de datos de cuentas en Cloudflare si falla localmente.
-        if normalizedEmail == "el.ulices67@gmail.com" && password == "ulicesjv679003" {
-            let root = MemoraCrypto.randomKey()
-            let recovery = try! MemoraCrypto.randomData(32)
-            let salt = try! MemoraCrypto.randomData(16)
-            let id = UUID()
-            let record = AccountRecord(
-                id: id, name: "Ulices (Cloudflare)", email: normalizedEmail,
-                createdAt: .now, passwordSalt: salt,
-                wrappedRootKey: try! MemoraCrypto.seal(
-                    MemoraCrypto.bytes(root), key: MemoraCrypto.passwordKey(password, salt: salt),
-                    context: "memora:account:\(id):password"
-                ),
-                wrappedRecoveryKey: try! MemoraCrypto.seal(
-                    MemoraCrypto.bytes(root), key: SymmetricKey(data: recovery),
-                    context: "memora:account:\(id):recovery"
-                )
-            )
-            self.account = record
-            self.rootKey = root
-            self.library = MemoryLibrary()
-            try? saveAccount()
-            try? saveLibrary()
-            self.authenticated = true
-            try? persistSessionIfEnabled()
-            
-            let codeStr = MemoraCrypto.recoveryString(recovery)
-            self.recoveryCode = codeStr
-            syncRecoveryCodeToCloud(email: normalizedEmail, code: codeStr)
-            return
+        // Búsqueda local o restauración transparente desde iCloud
+        var currentAccount = account
+        if currentAccount == nil || currentAccount?.email != normalizedEmail {
+            if let cloudRecord = CloudAccountStore.fetchAccount(email: normalizedEmail) {
+                currentAccount = cloudRecord
+                self.account = cloudRecord
+                try? saveAccount()
+            }
         }
-        // -----------------------------------------------------------
         
-        guard var record = account, record.email == normalizedEmail else { throw MemoraError.wrongCredentials }
+        guard var record = currentAccount, record.email == normalizedEmail else {
+            throw MemoraError.wrongCredentials
+        }
         if let blocked = record.blockedUntil, blocked > .now { throw MemoraError.locked }
         let plain: Data
         do {
@@ -298,18 +287,59 @@ final class MemoryStore: ObservableObject {
             throw MemoraError.wrongCredentials
         }
         guard plain.count == 32 else { throw MemoraError.corruptData }
-        rootKey = SymmetricKey(data: plain)
+        let verifiedRoot = SymmetricKey(data: plain)
+        rootKey = verifiedRoot
         do { try loadLibrary() } catch { rootKey = nil; throw error }
         record.failedAttempts = 0
         record.blockedUntil = nil
         account = record
         try saveAccount()
+        try? BiometricAccountKey.save(verifiedRoot, email: normalizedEmail)
         authenticated = true
         try? persistSessionIfEnabled()
     }
 
+    func loginWithBiometrics(email input: String) async throws {
+        let normalizedEmail = normalized(input)
+        var currentAccount = account
+        if currentAccount == nil || currentAccount?.email != normalizedEmail {
+            if let cloudRecord = CloudAccountStore.fetchAccount(email: normalizedEmail) {
+                currentAccount = cloudRecord
+                self.account = cloudRecord
+                try? saveAccount()
+            }
+        }
+        guard let record = currentAccount, record.email == normalizedEmail else {
+            throw MemoraError.invalidInput("No se encontró la cuenta para \(normalizedEmail).")
+        }
+        let biometricKey = try await BiometricAccountKey.read(email: normalizedEmail)
+        rootKey = biometricKey
+        do {
+            try loadLibrary()
+        } catch {
+            rootKey = nil
+            throw error
+        }
+        self.account = record
+        authenticated = true
+        try? persistSessionIfEnabled()
+    }
+
+    func hasBiometricsEnrolled(email: String) -> Bool {
+        BiometricAccountKey.hasKey(email: normalized(email))
+    }
+
     func recover(email input: String, code: String, newPassword: String) throws -> String {
-        guard var record = account, record.email == normalized(input) else { throw MemoraError.wrongCredentials }
+        let normalizedEmail = normalized(input)
+        var currentAccount = account
+        if currentAccount == nil || currentAccount?.email != normalizedEmail {
+            if let cloudRecord = CloudAccountStore.fetchAccount(email: normalizedEmail) {
+                currentAccount = cloudRecord
+                self.account = cloudRecord
+                try? saveAccount()
+            }
+        }
+        guard var record = currentAccount, record.email == normalizedEmail else { throw MemoraError.wrongCredentials }
         guard newPassword.count >= 12, let recovery = MemoraCrypto.recoveryData(code) else {
             throw MemoraError.invalidInput("Revisa el código y usa una contraseña de 12 caracteres o más.")
         }
@@ -318,6 +348,7 @@ final class MemoryStore: ObservableObject {
             context: "memora:account:\(record.id):recovery"
         )
         guard plain.count == 32 else { throw MemoraError.corruptData }
+        let recoveredRoot = SymmetricKey(data: plain)
         let newRecovery = try MemoraCrypto.randomData(32)
         let newSalt = try MemoraCrypto.randomData(16)
         record.passwordSalt = newSalt
@@ -333,14 +364,54 @@ final class MemoryStore: ObservableObject {
         record.blockedUntil = nil
         account = record
         try saveAccount()
-        rootKey = SymmetricKey(data: plain)
+        rootKey = recoveredRoot
         try loadLibrary()
+        try? BiometricAccountKey.save(recoveredRoot, email: normalizedEmail)
         authenticated = true
         try? persistSessionIfEnabled()
         let codeStr = MemoraCrypto.recoveryString(newRecovery)
         recoveryCode = codeStr
         syncRecoveryCodeToCloud(email: record.email, code: codeStr)
         return codeStr
+    }
+
+    func recoverWithBiometrics(email input: String, newPassword: String) async throws {
+        let normalizedEmail = normalized(input)
+        var currentAccount = account
+        if currentAccount == nil || currentAccount?.email != normalizedEmail {
+            if let cloudRecord = CloudAccountStore.fetchAccount(email: normalizedEmail) {
+                currentAccount = cloudRecord
+                self.account = cloudRecord
+                try? saveAccount()
+            }
+        }
+        guard var record = currentAccount, record.email == normalizedEmail else { throw MemoraError.wrongCredentials }
+        guard newPassword.count >= 12 else {
+            throw MemoraError.invalidInput("La contraseña debe tener al menos 12 caracteres.")
+        }
+        let verifiedRoot = try await BiometricAccountKey.read(email: normalizedEmail)
+        let newRecovery = try MemoraCrypto.randomData(32)
+        let newSalt = try MemoraCrypto.randomData(16)
+        record.passwordSalt = newSalt
+        record.wrappedRootKey = try MemoraCrypto.seal(
+            MemoraCrypto.bytes(verifiedRoot), key: MemoraCrypto.passwordKey(newPassword, salt: newSalt),
+            context: "memora:account:\(record.id):password"
+        )
+        record.wrappedRecoveryKey = try MemoraCrypto.seal(
+            MemoraCrypto.bytes(verifiedRoot), key: SymmetricKey(data: newRecovery),
+            context: "memora:account:\(record.id):recovery"
+        )
+        record.failedAttempts = 0
+        record.blockedUntil = nil
+        account = record
+        try saveAccount()
+        rootKey = verifiedRoot
+        try loadLibrary()
+        authenticated = true
+        try? persistSessionIfEnabled()
+        let codeStr = MemoraCrypto.recoveryString(newRecovery)
+        recoveryCode = codeStr
+        syncRecoveryCodeToCloud(email: record.email, code: codeStr)
     }
 
     func logout() {
@@ -374,7 +445,7 @@ final class MemoryStore: ObservableObject {
         vaultKey = nil
         appLocked = false
         recoveryCode = nil
-        notice = "Los datos locales han sido borrados. Puedes crear una nueva cuenta."
+        notice = "Los datos locales han sido borrados. Puedes crear una nueva cuenta o recuperarla desde iCloud."
     }
 
     func setPersistentSession(_ enabled: Bool) throws {

@@ -70,7 +70,8 @@ enum MemoraCrypto {
     }
 
     static func recoveryData(_ input: String) -> Data? {
-        let hex = input.filter { $0 != "-" && !$0.isWhitespace }
+        let hex = input.filter { $0 != "-" && !$0.isWhitespace && $0 != ":" && $0 != "_" }
+            .uppercased()
         guard hex.count == 64 else { return nil }
         var data = Data()
         var offset = hex.startIndex
@@ -134,6 +135,113 @@ enum BiometricAuth {
                 continuation.resume(returning: success)
             }
         }
+    }
+}
+
+// MARK: - Biometric Account Key (Face ID Login & Recovery)
+enum BiometricAccountKey {
+    private static let service = "app.memora.native.account-root"
+
+    static func available() -> Bool {
+        BiometricAuth.available()
+    }
+
+    static func save(_ key: SymmetricKey, email: String) throws {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: normalizedEmail
+        ]
+        SecItemDelete(query as CFDictionary)
+        
+        var add = query
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        add[kSecValueData as String] = MemoraCrypto.bytes(key)
+        
+        let status = SecItemAdd(add as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw MemoraError.corruptData
+        }
+    }
+
+    static func read(email: String) async throws -> SymmetricKey {
+        guard available() else {
+            throw MemoraError.invalidInput("Face ID no está disponible en este dispositivo.")
+        }
+        let authenticated = await BiometricAuth.authenticate(reason: "Identifícate con Face ID para acceder a tu cuenta Memora")
+        guard authenticated else {
+            throw MemoraError.invalidInput("Verificación Face ID cancelada o no reconocida.")
+        }
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: normalizedEmail,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data, data.count == 32 else {
+            throw MemoraError.invalidInput("No se encontró una llave Face ID guardada para esta cuenta. Usa tu contraseña o código de recuperación.")
+        }
+        return SymmetricKey(data: data)
+    }
+
+    static func hasKey(email: String) -> Bool {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: normalizedEmail,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
+    }
+
+    static func remove(email: String) {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: normalizedEmail
+        ] as CFDictionary)
+    }
+}
+
+// MARK: - iCloud Cloud Account Store (Zero Data Loss)
+enum CloudAccountStore {
+    private static let keyPrefix = "memora.cloud.account."
+    private static let activeKey = "memora.cloud.active_email"
+
+    static func saveAccount(_ record: AccountRecord) {
+        let key = keyPrefix + record.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let encoded = try? JSONEncoder().encode(record) {
+            NSUbiquitousKeyValueStore.default.set(encoded, forKey: key)
+            NSUbiquitousKeyValueStore.default.set(record.email, forKey: activeKey)
+            NSUbiquitousKeyValueStore.default.synchronize()
+        }
+    }
+
+    static func fetchAccount(email: String) -> AccountRecord? {
+        let key = keyPrefix + email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let data = NSUbiquitousKeyValueStore.default.data(forKey: key),
+              let record = try? JSONDecoder().decode(AccountRecord.self, from: data) else {
+            return nil
+        }
+        return record
+    }
+
+    static func lastActiveEmail() -> String? {
+        NSUbiquitousKeyValueStore.default.string(forKey: activeKey)
+    }
+
+    static func removeAccount(email: String) {
+        let key = keyPrefix + email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        NSUbiquitousKeyValueStore.default.removeObject(forKey: key)
+        NSUbiquitousKeyValueStore.default.synchronize()
     }
 }
 

@@ -205,7 +205,7 @@ struct SettingsView: View {
                         }.buttonStyle(.plain)
                     }
                 }
-                Text("Memora para iOS · 0.6.0 (8) · Los archivos permanecen en este dispositivo.")
+                Text("Memora para iOS · 0.8.0 (11) · Cuentas y respaldos sincronizados en iCloud.")
                     .font(.caption).foregroundStyle(MemoraStyle.muted).padding(.top, 10)
             }
             .padding(MemoraStyle.pagePadding)
@@ -742,6 +742,25 @@ struct FaceIDSettingsView: View {
                             }
                         }
                         .disabled(!store.biometricAvailable)
+                    }
+                }
+
+                SectionHeading(title: "Recuperación Biométrica de Cuenta")
+                Panel {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Image(systemName: "key.viewfinder")
+                                .foregroundStyle(.mint)
+                            Text("Recuperación de cuenta con Face ID")
+                                .font(.body.weight(.medium))
+                            Spacer()
+                            Text("Activo")
+                                .font(.caption.bold())
+                                .foregroundStyle(.mint)
+                        }
+                        Text("Si olvidas tu contraseña, puedes escanear tu rostro en la pantalla de inicio para restablecerla inmediatamente sin perder tus recuerdos.")
+                            .font(.caption)
+                            .foregroundStyle(MemoraStyle.muted)
                     }
                 }
 

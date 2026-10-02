@@ -34,15 +34,38 @@ struct AuthView: View {
                 }
                 .padding(.top, 28)
 
-                Text(mode == .register ? "Aquí empieza tu historia." : "Tus recuerdos, contigo.")
+                Text(mode == .register ? "Aquí empieza tu historia." : (mode == .recover ? "Recupera tu acceso." : "Tus recuerdos, contigo."))
                     .font(MemoraStyle.title(34))
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("Un lugar privado para guardar y volver a lo que más importa.")
+                Text(mode == .recover ? "Usa Face ID, tu código de iCloud o tu llave de recuperación." : "Un lugar privado y encriptado para guardar y volver a lo que más importa.")
                     .font(.subheadline)
                     .foregroundStyle(MemoraStyle.muted)
+
+                if let cloudEmail = store.detectedCloudEmail, email.isEmpty {
+                    Panel {
+                        HStack {
+                            Image(systemName: "icloud.fill")
+                                .foregroundStyle(.mint)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Cuenta sincronizada en iCloud")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.white)
+                                Text(cloudEmail)
+                                    .font(.caption2)
+                                    .foregroundStyle(MemoraStyle.muted)
+                            }
+                            Spacer()
+                            Button("Usar") {
+                                email = cloudEmail
+                            }
+                            .font(.caption.bold())
+                            .buttonStyle(MemoraButtonStyle(prominent: true))
+                        }
+                    }
+                }
 
                 Panel {
                     VStack(alignment: .leading, spacing: 15) {
@@ -71,6 +94,24 @@ struct AuthView: View {
                             .autocorrectionDisabled()
                         
                         if mode == .recover {
+                            // Opción 1: Recuperación con Face ID
+                            if BiometricAuth.available() && !email.isEmpty {
+                                Button {
+                                    recoverWithBiometrics()
+                                } label: {
+                                    HStack {
+                                        Image(systemName: store.biometricType == .touchID ? "touchid" : "faceid")
+                                        Text("Recuperar con \(store.biometricType.title)")
+                                    }
+                                    .font(.subheadline.bold())
+                                    .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(MemoraButtonStyle())
+                                .padding(.vertical, 4)
+
+                                Divider()
+                            }
+
                             input("Código de recuperación", text: $recovery)
                             
                             Button {
@@ -91,26 +132,44 @@ struct AuthView: View {
                             .padding(.bottom, 5)
                         }
                         
-                        SecureField(mode == .recover ? "Contraseña nueva" : "Contraseña", text: $password)
+                        SecureField(mode == .recover ? "Contraseña nueva (mín. 12 caracteres)" : "Contraseña", text: $password)
                             .textContentType(mode == .login ? .password : .newPassword)
                             .frame(minHeight: MemoraStyle.controlHeight)
                             .padding(.horizontal, 14)
                             .background(MemoraStyle.background, in: RoundedRectangle(cornerRadius: 12))
+                        
                         if mode == .register {
                             SecureField("Confirmar contraseña", text: $confirmation)
                                 .frame(minHeight: MemoraStyle.controlHeight)
                                 .padding(.horizontal, 14)
                                 .background(MemoraStyle.background, in: RoundedRectangle(cornerRadius: 12))
                         }
+
                         if let error {
                             Text(error)
                                 .font(.caption)
                                 .foregroundStyle(.red)
                         }
+
+                        // Botón de Inicio con Face ID en Login
+                        if mode == .login && BiometricAuth.available() && !email.isEmpty {
+                            Button {
+                                loginWithBiometrics()
+                            } label: {
+                                HStack {
+                                    Image(systemName: store.biometricType == .touchID ? "touchid" : "faceid")
+                                    Text("Entrar con \(store.biometricType.title)")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(MemoraButtonStyle())
+                            .disabled(working)
+                        }
+
                         Button { submit() } label: {
                             HStack {
                                 if working { ProgressView().tint(.black) }
-                                Text(mode == .login ? "Entrar a mi biblioteca" : mode == .register ? "Crear mi cuenta" : "Recuperar acceso")
+                                Text(mode == .login ? "Entrar con contraseña" : mode == .register ? "Crear mi cuenta" : "Restablecer con código")
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.85)
                             }
@@ -118,7 +177,7 @@ struct AuthView: View {
                         .buttonStyle(MemoraButtonStyle(prominent: true))
                         .disabled(working || email.isEmpty || password.isEmpty)
 
-                        Button(mode == .recover ? "Volver a iniciar sesión" : "¿Olvidaste tu contraseña?") {
+                        Button(mode == .recover ? "Volver a iniciar sesión" : "¿Olvidaste tu contraseña o código?") {
                             mode = mode == .recover ? .login : .recover
                             error = nil
                         }
@@ -127,7 +186,7 @@ struct AuthView: View {
                     }
                 }
 
-                Text("Cuenta local en este iPhone. Al entrar, la sesión puede mantenerse mediante Keychain; puedes revocarla desde Perfil → Configuración → Dispositivos y sesiones.")
+                Text("Las cuentas y códigos se sincronizan de forma cifrada (E2EE) con tu iCloud privado para que nunca pierdas tu biblioteca.")
                     .font(.caption)
                     .foregroundStyle(MemoraStyle.muted)
                 
@@ -135,7 +194,7 @@ struct AuthView: View {
                     Button(role: .destructive) {
                         showWipeWarning = true
                     } label: {
-                        Text("Restablecer cuenta local (Borrar todos los datos)")
+                        Text("Restablecer cuenta local en este iPhone")
                             .font(.caption)
                             .frame(maxWidth: .infinity)
                             .padding(.top, 10)
@@ -148,6 +207,11 @@ struct AuthView: View {
             .frame(maxWidth: .infinity)
         }
         .memoraPage()
+        .onAppear {
+            if email.isEmpty, let saved = store.detectedCloudEmail {
+                email = saved
+            }
+        }
         .alert("¿Borrar cuenta local?", isPresented: $showWipeWarning) {
             Button("Cancelar", role: .cancel) { }
             Button("Borrar todo", role: .destructive) {
@@ -155,7 +219,7 @@ struct AuthView: View {
                 mode = .register
             }
         } message: {
-            Text("Esto eliminará la base de datos de Memora de este iPhone. Es irreversible.")
+            Text("Esto eliminará la base de datos local de este iPhone. Tu cuenta seguirá protegida en tu iCloud.")
         }
     }
 
@@ -166,6 +230,38 @@ struct AuthView: View {
             .frame(minHeight: MemoraStyle.controlHeight)
             .padding(.horizontal, 14)
             .background(MemoraStyle.background, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func loginWithBiometrics() {
+        working = true
+        error = nil
+        Task {
+            do {
+                try await store.loginWithBiometrics(email: email)
+            } catch {
+                self.error = error.localizedDescription
+            }
+            working = false
+        }
+    }
+
+    private func recoverWithBiometrics() {
+        guard password.count >= 12 else {
+            error = "Escribe una nueva contraseña de al menos 12 caracteres."
+            return
+        }
+        working = true
+        error = nil
+        Task {
+            do {
+                try await store.recoverWithBiometrics(email: email, newPassword: password)
+                password = ""
+                recovery = ""
+            } catch {
+                self.error = error.localizedDescription
+            }
+            working = false
+        }
     }
 
     private func submit() {

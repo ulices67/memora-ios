@@ -401,6 +401,17 @@ final class MemoryStore: ObservableObject {
         thumbnailCache[id] = nil
     }
 
+    func restoreFromTrash(_ id: UUID) throws {
+        try restore(id)
+    }
+
+    func emptyTrash() throws {
+        let trashIDs = trash.map { $0.id }
+        for id in trashIDs {
+            try deleteForever(id)
+        }
+    }
+
     private func assetKey(_ asset: MemoryAsset, secure: Bool) throws -> SymmetricKey {
         guard let account else { throw MemoraError.noAccount }
         let wrapping = try (secure ? requiredVaultKey() : fileWrapKey())

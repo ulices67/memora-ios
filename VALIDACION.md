@@ -1,6 +1,8 @@
-# Validación · Memora iOS 0.4.0
+# Validación · Memora iOS 0.5.0
 
-- Versión actualizada a `MARKETING_VERSION = 0.4.0` y `CURRENT_PROJECT_VERSION = 4`.
+- Versión actualizada a `MARKETING_VERSION = 0.5.0` y `CURRENT_PROJECT_VERSION = 5`.
+- Diseño adaptable responsive en base a 393 pt y cuadrículas adaptativas para iPhone y iPad.
+- Operaciones completas de papelera: vaciado (`emptyTrash`) y restauración (`restoreFromTrash`).
 - Sesión persistente nativa añadida mediante Keychain (`AfterFirstUnlockThisDeviceOnly`), restauración verificada al iniciar y revocación al cerrar sesión.
 - Control funcional “Mantener sesión iniciada” añadido a Configuración → Dispositivos y sesiones.
 - Configuración enlazada con pantallas funcionales de perfil, contraseña, sesiones, cifrado, privacidad, biblioteca, almacenamiento y bóveda.

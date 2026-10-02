@@ -1184,10 +1184,14 @@ final class MemoryStore: ObservableObject {
 struct CloudSyncService {
     static func uploadBackup(accountID: UUID, libraryData: Data, vaultData: Data?, files: [String: Data]) async throws {
         let container = MemoraE2EEContainer(
+            version: 1,
             accountID: accountID,
+            createdAt: Date(),
+            salt: Data(),
             libraryData: libraryData,
             vaultData: vaultData,
-            files: files
+            files: files,
+            checksum: MemoraCrypto.sha256(libraryData)
         )
         // Simulate upload to Cloudflare R2
         try await Task.sleep(nanoseconds: 1_500_000_000)

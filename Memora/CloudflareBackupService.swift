@@ -49,12 +49,32 @@ struct CloudflareRemoteBackup: Identifiable, Hashable {
 struct MemoraE2EEContainer: Codable {
     var version: Int = 1
     var accountID: UUID
-    var createdAt: Date
-    var salt: Data
+    var createdAt: Date = Date()
+    var salt: Data = Data()
     var libraryData: Data
-    var vaultData: Data?
-    var files: [String: Data] // filename -> encrypted bytes
-    var checksum: String
+    var vaultData: Data? = nil
+    var files: [String: Data] = [:] // filename -> encrypted bytes
+    var checksum: String = ""
+
+    init(
+        version: Int = 1,
+        accountID: UUID,
+        createdAt: Date = Date(),
+        salt: Data = Data(),
+        libraryData: Data,
+        vaultData: Data? = nil,
+        files: [String: Data] = [:],
+        checksum: String = ""
+    ) {
+        self.version = version
+        self.accountID = accountID
+        self.createdAt = createdAt
+        self.salt = salt
+        self.libraryData = libraryData
+        self.vaultData = vaultData
+        self.files = files
+        self.checksum = checksum
+    }
 }
 
 enum CloudflareBackupService {

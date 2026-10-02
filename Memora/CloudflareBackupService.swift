@@ -216,6 +216,7 @@ enum CloudflareBackupService {
     }
 
     // MARK: - Perform End-to-End Encrypted Backup
+    @MainActor
     static func performBackup(
         config: CloudflareConfig,
         store: MemoryStore
@@ -366,6 +367,7 @@ enum CloudflareBackupService {
     }
 
     // MARK: - Restore End-to-End Encrypted Backup
+    @MainActor
     static func restoreBackup(
         key: String,
         config: CloudflareConfig,

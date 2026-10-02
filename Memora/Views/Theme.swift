@@ -6,6 +6,8 @@ enum MemoraStyle {
     static let surface = Color(red: 0.095, green: 0.105, blue: 0.11)
     static let raised = Color(red: 0.135, green: 0.145, blue: 0.15)
     static let border = Color.white.opacity(0.12)
+    static let line = Color.white.opacity(0.12)
+    static let surfaceElevated = Color(red: 0.16, green: 0.17, blue: 0.18)
     static let muted = Color(red: 0.62, green: 0.65, blue: 0.69)
     static let cream = Color(red: 0.95, green: 0.91, blue: 0.86)
 

@@ -119,7 +119,9 @@ struct AuthView: View {
             password = ""
             confirmation = ""
             recovery = ""
-        } catch { error = error.localizedDescription }
+        } catch let err {
+            self.error = err.localizedDescription
+        }
     }
 }
 

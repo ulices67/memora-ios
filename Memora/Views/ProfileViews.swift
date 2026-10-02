@@ -313,7 +313,7 @@ struct VaultView: View {
                             newRecoveryCode = try store.configureVault(password: password)
                             showRecoverySheet = true
                             password = ""; confirmation = ""; error = nil
-                        } catch { error = error.localizedDescription }
+                        } catch let err { self.error = err.localizedDescription }
                     }
                     .buttonStyle(MemoraButtonStyle(prominent: true))
                 } else if !store.vaultUnlocked {
@@ -328,7 +328,7 @@ struct VaultView: View {
                                 newRecoveryCode = try store.recoverVault(code: recoveryInput, newPassword: password)
                                 showRecoverySheet = true
                                 recoveryInput = ""; password = ""; recoveryMode = false; error = nil
-                            } catch { error = error.localizedDescription }
+                            } catch let err { self.error = err.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle(prominent: true))
                         Button("Volver a desbloquear") { recoveryMode = false; error = nil }
@@ -337,7 +337,7 @@ struct VaultView: View {
                             .textFieldStyle(.roundedBorder)
                         Button("Desbloquear") {
                             do { try store.unlockVault(password: password); password = ""; error = nil }
-                            catch { error = error.localizedDescription }
+                            catch let err { self.error = err.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle(prominent: true))
                         Button("¿Olvidaste la contraseña de la bóveda?") {
@@ -348,7 +348,7 @@ struct VaultView: View {
                     if store.biometricAvailable && !recoveryMode {
                         Button("Usar Face ID") {
                             do { try store.unlockVaultWithBiometrics(); error = nil }
-                            catch { error = error.localizedDescription }
+                            catch let err { self.error = err.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle())
                     }
@@ -366,7 +366,7 @@ struct VaultView: View {
                     if store.biometricAvailable {
                         Button("Activar Face ID para esta bóveda") {
                             do { try store.enableVaultBiometrics(); store.notice = "Face ID activado para la bóveda." }
-                            catch { error = error.localizedDescription }
+                            catch let err { self.error = err.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle())
                     }

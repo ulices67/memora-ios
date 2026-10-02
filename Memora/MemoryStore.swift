@@ -15,6 +15,9 @@ final class MemoryStore: ObservableObject {
     @Published var notice: String?
     @Published var busy = false
     @Published private(set) var persistentSessionEnabled = true
+    @Published private(set) var appBiometricsEnabled = false
+    @Published var appLocked = false
+    @Published private(set) var lastCloudflareBackupDate: Date?
 
     private var rootKey: SymmetricKey?
     private var vaultKey: SymmetricKey?
@@ -24,6 +27,8 @@ final class MemoryStore: ObservableObject {
     private let base: URL
     private let fileLimit = 50 * 1024 * 1024
     private let persistentSessionPreference = "memora.persistent-session.enabled"
+    private let appBiometricsPreference = "memora.app-biometrics.enabled"
+    private let lastBackupPreference = "memora.cloudflare.lastBackup"
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -33,6 +38,13 @@ final class MemoryStore: ObservableObject {
             account = try read(AccountRecord.self, from: base.appendingPathComponent("account.json"))
             if UserDefaults.standard.object(forKey: persistentSessionPreference) != nil {
                 persistentSessionEnabled = UserDefaults.standard.bool(forKey: persistentSessionPreference)
+            }
+            if UserDefaults.standard.bool(forKey: appBiometricsPreference) {
+                appBiometricsEnabled = true
+                appLocked = true
+            }
+            if let timestamp = UserDefaults.standard.object(forKey: lastBackupPreference) as? Double {
+                lastCloudflareBackupDate = Date(timeIntervalSince1970: timestamp)
             }
             if persistentSessionEnabled, let account,
                let savedKey = PersistentSession.read(account: account.id) {
@@ -51,14 +63,21 @@ final class MemoryStore: ObservableObject {
         }
     }
 
+    var baseDirectory: URL { base }
     var hasAccount: Bool { account != nil }
     var vaultUnlocked: Bool { privateLibrary != nil && vaultKey != nil }
     var vaultConfigured: Bool { account?.wrappedVaultKey != nil }
-    var biometricAvailable: Bool { BiometricVault.available() }
+    var biometricAvailable: Bool { BiometricAuth.available() }
+    var biometricType: BiometricAuth.BiometricType { BiometricAuth.biometricType }
     var activeAssets: [MemoryAsset] { library.assets.filter { $0.deletedAt == nil } }
     var trash: [MemoryAsset] { library.assets.filter { $0.deletedAt != nil } }
     var usedBytes: Int {
         library.assets.reduce(0) { $0 + $1.size } + (privateLibrary?.assets.reduce(0) { $0 + $1.size } ?? 0)
+    }
+
+    func requireRootKey() throws -> SymmetricKey {
+        guard let rootKey else { throw MemoraError.noAccount }
+        return rootKey
     }
 
     private var accountURL: URL { base.appendingPathComponent("account.json") }
@@ -218,6 +237,50 @@ final class MemoryStore: ObservableObject {
         }
     }
 
+    func setAppBiometricsEnabled(_ enabled: Bool) async throws {
+        if enabled {
+            guard BiometricAuth.available() else {
+                throw MemoraError.invalidInput("Face ID o Touch ID no está configurado en este dispositivo.")
+            }
+            let success = await BiometricAuth.authenticate(reason: "Verifica con Face ID para activar la protección de la app")
+            guard success else {
+                throw MemoraError.invalidInput("No se pudo verificar tu identidad biométrica.")
+            }
+        }
+        appBiometricsEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: appBiometricsPreference)
+        if !enabled { appLocked = false }
+    }
+
+    func unlockAppWithBiometrics() async -> Bool {
+        guard appBiometricsEnabled else {
+            appLocked = false
+            return true
+        }
+        let success = await BiometricAuth.authenticate(reason: "Desbloquea Memora para acceder a tu biblioteca")
+        if success {
+            appLocked = false
+        }
+        return success
+    }
+
+    func unlockAppWithPassword(_ password: String) throws {
+        guard let account else { throw MemoraError.noAccount }
+        let plain = try MemoraCrypto.open(
+            account.wrappedRootKey,
+            key: MemoraCrypto.passwordKey(password, salt: account.passwordSalt),
+            context: "memora:account:\(account.id):password"
+        )
+        guard plain.count == 32 else { throw MemoraError.corruptData }
+        appLocked = false
+    }
+
+    func lockApp() {
+        if appBiometricsEnabled {
+            appLocked = true
+        }
+    }
+
     private func persistSessionIfEnabled() throws {
         guard persistentSessionEnabled, let account, let rootKey else { return }
         try PersistentSession.save(rootKey, account: account.id)
@@ -308,6 +371,35 @@ final class MemoryStore: ObservableObject {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         library.sections.append(MemorySection(id: UUID(), name: trimmed, symbol: "folder"))
+        try saveLibrary()
+    }
+
+    func albums(in section: MemorySection) -> [MemoryAlbum] {
+        library.albums.filter { $0.sectionID == section.id }
+    }
+
+    func assets(in section: MemorySection) -> [MemoryAsset] {
+        let sectionAlbumIDs = Set(albums(in: section).map(\.id))
+        guard !sectionAlbumIDs.isEmpty else { return [] }
+        return activeAssets.filter { asset in
+            asset.albumIDs.contains(where: { sectionAlbumIDs.contains($0) })
+        }
+    }
+
+    func renameSection(_ id: UUID, newName: String) throws {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let index = library.sections.firstIndex(where: { $0.id == id }) else { return }
+        library.sections[index].name = trimmed
+        try saveLibrary()
+    }
+
+    func deleteSection(_ id: UUID) throws {
+        library.sections.removeAll { $0.id == id }
+        for index in library.albums.indices {
+            if library.albums[index].sectionID == id {
+                library.albums[index].sectionID = nil
+            }
+        }
         try saveLibrary()
     }
 
@@ -687,5 +779,38 @@ final class MemoryStore: ObservableObject {
 
     func checkVaultDeadline() {
         if let vaultDeadline, vaultDeadline <= .now { lockVault() }
+    }
+
+    func recordSuccessfulCloudflareBackup(date: Date = Date()) {
+        lastCloudflareBackupDate = date
+        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: lastBackupPreference)
+    }
+
+    func restoreFromE2EEContainer(_ container: MemoraE2EEContainer) async throws {
+        guard container.accountID == account?.id else {
+            throw MemoraError.invalidInput("Esta copia pertenece a otra cuenta de Memora.")
+        }
+        let restoredLibrary = try JSONDecoder().decode(MemoryLibrary.self, from: container.libraryData)
+        let restoredVault: PrivateLibrary? = {
+            guard let vd = container.vaultData else { return nil }
+            return try? JSONDecoder().decode(PrivateLibrary.self, from: vd)
+        }()
+
+        try FileManager.default.createDirectory(at: filesURL, withIntermediateDirectories: true)
+        for (filename, fileData) in container.files {
+            let target = filesURL.appendingPathComponent(filename)
+            try write(fileData, to: target)
+        }
+
+        self.library = restoredLibrary
+        try saveLibrary()
+
+        if let restoredVault {
+            self.privateLibrary = restoredVault
+            try saveVault()
+        }
+
+        thumbnailCache.removeAll()
+        notice = "Copia cifrada restaurada correctamente desde Cloudflare."
     }
 }

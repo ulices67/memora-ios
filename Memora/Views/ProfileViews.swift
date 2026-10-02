@@ -9,11 +9,14 @@ struct ProfileView: View {
             VStack(alignment: .leading, spacing: 13) {
                 HStack(alignment: .top) {
                     MemoraHeader(title: "Perfil", subtitle: "Tu cuenta y tu biblioteca")
-                    Image(systemName: "icloud.slash")
-                        .font(.body).foregroundStyle(MemoraStyle.muted)
-                        .frame(width: 38, height: 38)
-                        .background(MemoraStyle.surface, in: Circle())
-                        .accessibilityLabel("Sin sincronización en la nube")
+                    NavigationLink { CloudflareBackupView(store: store) } label: {
+                        Image(systemName: store.lastCloudflareBackupDate != nil ? "cloud.fill" : "cloud")
+                            .font(.body)
+                            .foregroundStyle(store.lastCloudflareBackupDate != nil ? .mint : MemoraStyle.muted)
+                            .frame(width: 38, height: 38)
+                            .background(MemoraStyle.surface, in: Circle())
+                    }
+                    .accessibilityLabel("Copias a Cloudflare E2EE")
                     NavigationLink { SettingsView(store: store) } label: {
                         Image(systemName: "gearshape")
                             .font(.body).frame(width: 38, height: 38)
@@ -53,9 +56,15 @@ struct ProfileView: View {
                     Panel { MemoryRow(symbol: "gearshape", title: "Configuración", detail: "Seguridad, privacidad y biblioteca") }
                 }
                 .buttonStyle(.plain)
-                SectionHeading(title: "Biblioteca")
+                SectionHeading(title: "Biblioteca y Nube")
                 NavigationLink { VaultView(store: store) } label: {
                     Panel { MemoryRow(symbol: "lock", title: "Bóveda privada", detail: store.vaultUnlocked ? "Desbloqueada" : "Bloqueada") }
+                }
+                .buttonStyle(.plain)
+                NavigationLink { CloudflareBackupView(store: store) } label: {
+                    Panel { MemoryRow(symbol: "cloud.fill", title: "Copias a Cloudflare",
+                                      detail: "Cifrado E2EE · AES-256-GCM",
+                                      trailing: store.lastCloudflareBackupDate != nil ? "Activo" : "Configurar") }
                 }
                 .buttonStyle(.plain)
                 NavigationLink { StorageView(store: store) } label: {
@@ -94,19 +103,22 @@ struct SettingsView: View {
                                       detail: "AES-256-GCM · Clave individual por archivo", trailing: "Activo")
                         }.buttonStyle(.plain)
                         Divider()
-                        NavigationLink { VaultView(store: store) } label: {
-                            MemoryRow(symbol: "faceid", title: "Face ID",
-                                      detail: store.biometricAvailable ? "Configurar en la bóveda" : "No disponible en este dispositivo")
+                        NavigationLink { FaceIDSettingsView(store: store) } label: {
+                            MemoryRow(symbol: store.biometricType == .touchID ? "touchid" : "faceid",
+                                      title: "Modo Face ID",
+                                      detail: store.appBiometricsEnabled ? "Protección de app y bóveda activa" : "Bloqueo biométrico al abrir",
+                                      trailing: store.appBiometricsEnabled ? "Activo" : nil)
                         }.buttonStyle(.plain)
                         Divider()
                         NavigationLink { VaultView(store: store) } label: {
-                            MemoryRow(symbol: "lock", title: "Bóveda",
+                            MemoryRow(symbol: "lock", title: "Bóveda privada",
                                       detail: store.vaultUnlocked ? "Desbloqueada temporalmente" : "Bloqueada")
                         }.buttonStyle(.plain)
                         Divider()
-                        NavigationLink { LocalOnlyView() } label: {
-                            MemoryRow(symbol: "icloud.slash", title: "Copias y sincronización",
-                                      detail: "Sólo local · Exportación manual disponible")
+                        NavigationLink { CloudflareBackupView(store: store) } label: {
+                            MemoryRow(symbol: "cloud.fill", title: "Copias a Cloudflare",
+                                      detail: "Cifrado de extremo a extremo (E2EE)",
+                                      trailing: store.lastCloudflareBackupDate != nil ? "Activo" : nil)
                         }.buttonStyle(.plain)
                     }
                 }
@@ -612,8 +624,374 @@ private struct PrivacyDetailView: View {
 private struct MetadataDetailView: View {
     var body: some View { InfoPage(title: "Metadatos", symbol: "location.slash", message: "Nombres, etiquetas, álbumes, personas y ubicaciones guardadas por Memora forman parte del manifiesto cifrado de la biblioteca.") }
 }
-private struct LocalOnlyView: View {
-    var body: some View { InfoPage(title: "Copias", symbol: "icloud.slash", message: "Esta compilación funciona de forma local. No indica que existe una copia remota y no envía originales a Cloudflare ni a otro servicio.") }
+struct FaceIDSettingsView: View {
+    @ObservedObject var store: MemoryStore
+    @State private var error: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                MemoraHeader(title: "Modo Face ID", subtitle: "Autenticación biométrica en el dispositivo")
+
+                Panel {
+                    HStack(spacing: 16) {
+                        Image(systemName: store.biometricType == .touchID ? "touchid" : "faceid")
+                            .font(.system(size: 44, weight: .ultraLight))
+                            .foregroundStyle(MemoraStyle.cream)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(store.biometricType.title)
+                                .font(MemoraStyle.title(22))
+                            Text(store.biometricAvailable
+                                 ? "Disponible y listo para usar en este iPhone."
+                                 : "No configurado o no disponible en este dispositivo.")
+                                .font(.caption)
+                                .foregroundStyle(MemoraStyle.muted)
+                        }
+                    }
+                }
+
+                SectionHeading(title: "Bloqueo de la aplicación")
+                Panel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: Binding(
+                            get: { store.appBiometricsEnabled },
+                            set: { enabled in
+                                Task {
+                                    do {
+                                        try await store.setAppBiometricsEnabled(enabled)
+                                        error = nil
+                                    } catch let err {
+                                        self.error = err.localizedDescription
+                                    }
+                                }
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Requerir \(store.biometricType.title) al abrir")
+                                    .font(.body)
+                                Text("Solicita autenticación cada vez que abres la aplicación o vuelves de segundo plano.")
+                                    .font(.caption)
+                                    .foregroundStyle(MemoraStyle.muted)
+                            }
+                        }
+                        .disabled(!store.biometricAvailable)
+                    }
+                }
+
+                SectionHeading(title: "Bóveda privada")
+                Panel {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Face ID para la Bóveda")
+                            Spacer()
+                            Text(store.vaultConfigured ? "Disponible" : "Sin configurar")
+                                .font(.caption)
+                                .foregroundStyle(MemoraStyle.muted)
+                        }
+                        Text("Puedes activar el desbloqueo rápido con biometría directamente desde la Bóveda una vez creada.")
+                            .font(.caption)
+                            .foregroundStyle(MemoraStyle.muted)
+                    }
+                }
+
+                SectionHeading(title: "Privacidad y seguridad")
+                Panel {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Enclave Seguro de Apple", systemImage: "lock.shield")
+                            .font(.subheadline.weight(.semibold))
+                        Text("Tu rostro y huella dactilar nunca son leídos ni almacenados por Memora. Todo el proceso es ejecutado de forma aislada por el Secure Enclave de iOS.")
+                            .font(.caption)
+                            .foregroundStyle(MemoraStyle.muted)
+                    }
+                }
+
+                if let error {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                }
+            }
+            .padding(MemoraStyle.pagePadding)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .memoraPage()
+    }
+}
+
+struct CloudflareBackupView: View {
+    @ObservedObject var store: MemoryStore
+    @State private var config = CloudflareBackupService.loadConfig()
+    @State private var testing = false
+    @State private var backingUp = false
+    @State private var loadingBackups = false
+    @State private var remoteBackups: [CloudflareRemoteBackup] = []
+    @State private var statusMessage: String?
+    @State private var isError = false
+    @State private var selectedRestoreBackup: CloudflareRemoteBackup?
+    @State private var confirmingRestore = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                MemoraHeader(title: "Copias a Cloudflare", subtitle: "Cifrado de extremo a extremo (E2EE)")
+
+                Panel {
+                    HStack(alignment: .top, spacing: 14) {
+                        Image(systemName: "checkmark.shield.fill")
+                            .font(.title)
+                            .foregroundStyle(.mint)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Cifrado E2EE con AES-256-GCM")
+                                .font(MemoraStyle.title(18))
+                                .foregroundStyle(.white)
+                            Text("Tus recuerdos, miniaturas y metadatos se cifran localmente con tu clave privada antes de enviarse. Cloudflare únicamente almacena datos binarios cifrados opacos que nadie más puede abrir.")
+                                .font(.caption)
+                                .foregroundStyle(MemoraStyle.muted)
+                        }
+                    }
+                }
+
+                SectionHeading(title: "Estado del respaldo")
+                Panel {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Última copia remota:")
+                                .font(.subheadline)
+                                .foregroundStyle(MemoraStyle.muted)
+                            Spacer()
+                            Text(store.lastCloudflareBackupDate?.formatted(date: .abbreviated, time: .shortened) ?? "Ninguna")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        Divider()
+                        HStack {
+                            Text("Archivos locales:")
+                                .font(.subheadline)
+                                .foregroundStyle(MemoraStyle.muted)
+                            Spacer()
+                            Text("\(store.activeAssets.count) archivos (\(store.usedBytes.memorySize))")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                    }
+                }
+
+                SectionHeading(title: "Configuración de Cloudflare R2")
+                Panel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Account ID")
+                                .font(.caption).foregroundStyle(MemoraStyle.muted)
+                            TextField("Ej. a1b2c3d4e5f6...", text: $config.accountID)
+                                .textFieldStyle(.roundedBorder)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Nombre del Bucket R2")
+                                .font(.caption).foregroundStyle(MemoraStyle.muted)
+                            TextField("Ej. memora-backups", text: $config.bucketName)
+                                .textFieldStyle(.roundedBorder)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Access Key ID (R2 Token)")
+                                .font(.caption).foregroundStyle(MemoraStyle.muted)
+                            TextField("Access Key ID", text: $config.accessKeyID)
+                                .textFieldStyle(.roundedBorder)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Secret Access Key")
+                                .font(.caption).foregroundStyle(MemoraStyle.muted)
+                            SecureField("Secret Access Key", text: $config.secretAccessKey)
+                                .textFieldStyle(.roundedBorder)
+                        }
+
+                        Toggle("Contraseña E2EE personalizada (Opcional)", isOn: $config.useCustomPassphrase)
+                            .font(.subheadline)
+
+                        if config.useCustomPassphrase {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Contraseña de cifrado E2EE")
+                                    .font(.caption).foregroundStyle(MemoraStyle.muted)
+                                SecureField("Usa al menos 12 caracteres", text: $config.customPassphrase)
+                                    .textFieldStyle(.roundedBorder)
+                                Text("Si la defines, necesitarás esta misma contraseña para restaurar la copia.")
+                                    .font(.caption2).foregroundStyle(MemoraStyle.muted)
+                            }
+                        }
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        testConnection()
+                    } label: {
+                        if testing {
+                            ProgressView().tint(.white)
+                        } else {
+                            Label("Probar conexión", systemImage: "network")
+                        }
+                    }
+                    .buttonStyle(MemoraButtonStyle())
+                    .disabled(testing || backingUp)
+
+                    Button {
+                        performBackup()
+                    } label: {
+                        if backingUp {
+                            ProgressView().tint(MemoraStyle.background)
+                        } else {
+                            Label("Hacer copia cifrada", systemImage: "arrow.clockwise.icloud.fill")
+                        }
+                    }
+                    .buttonStyle(MemoraButtonStyle(prominent: true))
+                    .disabled(testing || backingUp || !config.isConfigured)
+                }
+
+                if let statusMessage {
+                    Text(statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(isError ? .red : .mint)
+                        .padding(.horizontal, 4)
+                }
+
+                SectionHeading(title: "Copias cifradas en Cloudflare")
+                if remoteBackups.isEmpty {
+                    Button {
+                        fetchRemoteBackups()
+                    } label: {
+                        if loadingBackups {
+                            ProgressView().tint(.white)
+                        } else {
+                            Label("Buscar copias en Cloudflare", systemImage: "magnifyingglass")
+                        }
+                    }
+                    .buttonStyle(MemoraButtonStyle())
+                    .disabled(loadingBackups || !config.isConfigured)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(remoteBackups) { backup in
+                            Panel {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(backup.formattedDate)
+                                            .font(.body.weight(.semibold))
+                                        Text("\(backup.formattedSize) · E2EE AES-256-GCM")
+                                            .font(.caption).foregroundStyle(MemoraStyle.muted)
+                                    }
+                                    Spacer()
+                                    Button("Restaurar") {
+                                        selectedRestoreBackup = backup
+                                        confirmingRestore = true
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(MemoraStyle.cream)
+                                    .foregroundStyle(MemoraStyle.background)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(MemoraStyle.pagePadding)
+            .padding(.bottom, 24)
+        }
+        .onChange(of: config) { _, newConfig in
+            CloudflareBackupService.saveConfig(newConfig)
+        }
+        .onAppear {
+            if config.isConfigured {
+                fetchRemoteBackups()
+            }
+        }
+        .confirmationDialog(
+            "¿Restaurar copia desde Cloudflare?",
+            isPresented: $confirmingRestore,
+            titleVisibility: .visible
+        ) {
+            Button("Descargar y descifrar copia", role: .destructive) {
+                if let backup = selectedRestoreBackup {
+                    restoreBackup(backup)
+                }
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Esta acción sincronizará los recuerdos y metadatos contenidos en la copia cifrada seleccionada.")
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .memoraPage()
+    }
+
+    private func testConnection() {
+        testing = true
+        statusMessage = "Probando conexión con Cloudflare R2..."
+        isError = false
+        Task {
+            do {
+                try await CloudflareBackupService.testConnection(config: config)
+                testing = false
+                statusMessage = "Conexión exitosa con el bucket '\(config.bucketName)'."
+                isError = false
+                fetchRemoteBackups()
+            } catch {
+                testing = false
+                statusMessage = error.localizedDescription
+                isError = true
+            }
+        }
+    }
+
+    private func performBackup() {
+        backingUp = true
+        statusMessage = "Empaquetando y cifrando recuerdos con AES-256-GCM..."
+        isError = false
+        Task {
+            do {
+                let backup = try await CloudflareBackupService.performBackup(config: config, store: store)
+                store.recordSuccessfulCloudflareBackup(date: backup.date)
+                backingUp = false
+                statusMessage = "¡Copia cifrada de extremo a extremo subida exitosamente! (\(backup.formattedSize))"
+                isError = false
+                fetchRemoteBackups()
+            } catch {
+                backingUp = false
+                statusMessage = error.localizedDescription
+                isError = true
+            }
+        }
+    }
+
+    private func fetchRemoteBackups() {
+        guard config.isConfigured else { return }
+        loadingBackups = true
+        Task {
+            do {
+                let backups = try await CloudflareBackupService.listBackups(config: config)
+                remoteBackups = backups
+                loadingBackups = false
+            } catch {
+                loadingBackups = false
+            }
+        }
+    }
+
+    private func restoreBackup(_ backup: CloudflareRemoteBackup) {
+        statusMessage = "Descargando y descifrando copia desde Cloudflare..."
+        isError = false
+        Task {
+            do {
+                try await CloudflareBackupService.restoreBackup(key: backup.key, config: config, store: store)
+                statusMessage = "Copia cifrada restaurada con éxito."
+                isError = false
+            } catch {
+                statusMessage = error.localizedDescription
+                isError = true
+            }
+        }
+    }
 }
 private struct AppearanceView: View {
     var body: some View { InfoPage(title: "Apariencia", symbol: "moon.stars", message: "Memora usa un tema oscuro de alto contraste, tipografía adaptable y controles de al menos 44 puntos para facilitar el uso en todos los tamaños de iPhone.") }

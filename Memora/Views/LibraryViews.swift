@@ -171,11 +171,12 @@ struct LibraryView: View {
                     Button { addingSection = true } label: { Image(systemName: "plus.circle") }
                         .accessibilityLabel("Nueva sección")
                 }
-                ForEach(store.library.sections) { section in
-                    Panel {
-                        Label(section.name, systemImage: section.symbol)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                if store.library.sections.isEmpty {
+                    EmptyMemory(symbol: "folder.badge.plus", title: "Organiza por secciones",
+                                message: "Crea carpetas maestras (Amigos, Viajes, Familia). Mantén presionado para abrir sus álbumes.")
+                } else {
+                    ForEach(store.library.sections) { section in
+                        SectionRowView(store: store, section: section)
                     }
                 }
                 SectionHeading(title: filter?.label ?? "Todos los archivos")
@@ -295,6 +296,189 @@ struct AlbumDetailView: View {
                 } else { AssetGrid(store: store, assets: assets, secure: secure) }
             }
             .padding(MemoraStyle.pagePadding)
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .memoraPage()
+    }
+}
+
+struct SectionRowView: View {
+    @ObservedObject var store: MemoryStore
+    let section: MemorySection
+    @State private var isPressed = false
+    @State private var showDetail = false
+    @State private var showRenameAlert = false
+    @State private var renameText = ""
+    @State private var showNewAlbumAlert = false
+    @State private var newAlbumName = ""
+
+    private var albums: [MemoryAlbum] { store.albums(in: section) }
+    private var assets: [MemoryAsset] { store.assets(in: section) }
+
+    var body: some View {
+        Button {
+            showDetail = true
+        } label: {
+            Panel {
+                HStack(spacing: 14) {
+                    Image(systemName: section.symbol)
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(MemoraStyle.cream)
+                        .frame(width: 44, height: 44)
+                        .background(MemoraStyle.raised, in: RoundedRectangle(cornerRadius: 12))
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(section.name)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Text("\(albums.count) álbumes · \(assets.count) recuerdos")
+                            .font(.caption)
+                            .foregroundStyle(MemoraStyle.muted)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Mantén presionado")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(MemoraStyle.muted)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2)
+                            .foregroundStyle(MemoraStyle.muted)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(isPressed ? 0.96 : 1.0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isPressed)
+        .onLongPressGesture(minimumDuration: 0.35, pressing: { pressing in
+            isPressed = pressing
+        }) {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            showDetail = true
+        }
+        .contextMenu {
+            Button {
+                showDetail = true
+            } label: {
+                Label("Abrir sección", systemImage: "folder.badge.gearshape")
+            }
+
+            Button {
+                newAlbumName = ""
+                showNewAlbumAlert = true
+            } label: {
+                Label("Nuevo álbum en sección", systemImage: "rectangle.stack.badge.plus")
+            }
+
+            Button {
+                renameText = section.name
+                showRenameAlert = true
+            } label: {
+                Label("Renombrar sección", systemImage: "pencil")
+            }
+
+            Divider()
+
+            Button(role: .destructive) {
+                do { try store.deleteSection(section.id) }
+                catch { store.notice = error.localizedDescription }
+            } label: {
+                Label("Eliminar sección", systemImage: "trash")
+            }
+        }
+        .navigationDestination(isPresented: $showDetail) {
+            SectionDetailView(store: store, section: section)
+        }
+        .alert("Renombrar sección", isPresented: $showRenameAlert) {
+            TextField("Nombre", text: $renameText)
+            Button("Guardar") {
+                do { try store.renameSection(section.id, newName: renameText) }
+                catch { store.notice = error.localizedDescription }
+            }
+            Button("Cancelar", role: .cancel) {}
+        }
+        .alert("Nuevo álbum en \(section.name)", isPresented: $showNewAlbumAlert) {
+            TextField("Nombre del álbum", text: $newAlbumName)
+            Button("Crear") {
+                do { try store.createAlbum(newAlbumName, sectionID: section.id) }
+                catch { store.notice = error.localizedDescription }
+            }
+            Button("Cancelar", role: .cancel) {}
+        }
+    }
+}
+
+struct SectionDetailView: View {
+    @ObservedObject var store: MemoryStore
+    let section: MemorySection
+    @State private var addingAlbum = false
+    @State private var albumName = ""
+
+    private var albums: [MemoryAlbum] { store.albums(in: section) }
+    private var assets: [MemoryAsset] { store.assets(in: section) }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                MemoraHeader(
+                    title: section.name,
+                    subtitle: "\(albums.count) álbumes · \(assets.count) recuerdos asociados"
+                )
+
+                HStack {
+                    SectionHeading(title: "Álbumes de la sección")
+                    Button { addingAlbum = true } label: { Image(systemName: "plus.circle") }
+                        .accessibilityLabel("Nuevo álbum en esta sección")
+                }
+
+                if albums.isEmpty {
+                    EmptyMemory(
+                        symbol: "rectangle.stack.badge.plus",
+                        title: "Sin álbumes en esta sección",
+                        message: "Crea un álbum dentro de '\(section.name)' para agrupar recuerdos afines."
+                    )
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)], spacing: 12) {
+                        ForEach(albums) { album in
+                            NavigationLink {
+                                AlbumDetailView(store: store, album: album)
+                            } label: {
+                                AlbumTile(store: store, album: album)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                SectionHeading(title: "Todos los recuerdos en esta sección")
+                if assets.isEmpty {
+                    EmptyMemory(
+                        symbol: "photo.stack",
+                        title: "No hay archivos asignados",
+                        message: "Los archivos que pertenezcan a los álbumes de esta sección aparecerán aquí."
+                    )
+                } else {
+                    AssetGrid(store: store, assets: assets)
+                }
+            }
+            .padding(MemoraStyle.pagePadding)
+        }
+        .alert("Nuevo álbum en \(section.name)", isPresented: $addingAlbum) {
+            TextField("Nombre del álbum", text: $albumName)
+            Button("Crear") {
+                do {
+                    try store.createAlbum(albumName, sectionID: section.id)
+                    albumName = ""
+                } catch {
+                    store.notice = error.localizedDescription
+                }
+            }
+            Button("Cancelar", role: .cancel) { albumName = "" }
         }
         .navigationBarTitleDisplayMode(.inline)
         .memoraPage()

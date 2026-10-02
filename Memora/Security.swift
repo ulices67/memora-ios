@@ -94,6 +94,49 @@ private extension String {
     }
 }
 
+enum BiometricAuth {
+    enum BiometricType {
+        case none, touchID, faceID
+        var title: String {
+            switch self {
+            case .none: return "No disponible"
+            case .touchID: return "Touch ID"
+            case .faceID: return "Face ID"
+            }
+        }
+    }
+
+    static var biometricType: BiometricType {
+        let context = LAContext()
+        var error: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
+            return .none
+        }
+        switch context.biometryType {
+        case .faceID: return .faceID
+        case .touchID: return .touchID
+        case .opticID: return .faceID
+        case .none: return .none
+        @unknown default: return .none
+        }
+    }
+
+    static func available() -> Bool {
+        let context = LAContext()
+        return context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+    }
+
+    static func authenticate(reason: String) async -> Bool {
+        let context = LAContext()
+        context.localizedCancelTitle = "Cancelar"
+        return await withCheckedContinuation { continuation in
+            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { success, _ in
+                continuation.resume(returning: success)
+            }
+        }
+    }
+}
+
 enum BiometricVault {
     private static let service = "app.memora.native.vault"
 

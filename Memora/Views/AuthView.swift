@@ -69,7 +69,28 @@ struct AuthView: View {
                         input("Correo electrónico", text: $email, keyboard: .emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
-                        if mode == .recover { input("Código de recuperación", text: $recovery) }
+                        
+                        if mode == .recover {
+                            input("Código de recuperación", text: $recovery)
+                            
+                            Button {
+                                if let code = store.fetchRecoveryCodeFromCloud(email: email) {
+                                    recovery = code
+                                    error = nil
+                                } else {
+                                    error = "No se encontró un código en iCloud para este correo."
+                                }
+                            } label: {
+                                HStack {
+                                    Image(systemName: "icloud.and.arrow.down")
+                                    Text("Cargar código de recuperación desde iCloud")
+                                }
+                                .font(.caption.weight(.medium))
+                            }
+                            .padding(.top, -5)
+                            .padding(.bottom, 5)
+                        }
+                        
                         SecureField(mode == .recover ? "Contraseña nueva" : "Contraseña", text: $password)
                             .textContentType(mode == .login ? .password : .newPassword)
                             .frame(minHeight: MemoraStyle.controlHeight)

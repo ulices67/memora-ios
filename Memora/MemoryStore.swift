@@ -195,6 +195,17 @@ final class MemoryStore: ObservableObject {
         }
     }
 
+    func syncRecoveryCodeToCloud(email: String, code: String) {
+        let key = "memora.recovery.\(email)"
+        NSUbiquitousKeyValueStore.default.set(code, forKey: key)
+        NSUbiquitousKeyValueStore.default.synchronize()
+    }
+    
+    func fetchRecoveryCodeFromCloud(email: String) -> String? {
+        let key = "memora.recovery.\(email)"
+        return NSUbiquitousKeyValueStore.default.string(forKey: key)
+    }
+
     func register(name: String, email input: String, password: String) throws -> String {
         guard account == nil else {
             throw MemoraError.invalidInput("Ya existe una cuenta local. Inicia sesión.")
@@ -226,6 +237,7 @@ final class MemoryStore: ObservableObject {
         try? persistSessionIfEnabled()
         let code = MemoraCrypto.recoveryString(recovery)
         recoveryCode = code
+        syncRecoveryCodeToCloud(email: email, code: code)
         return code
     }
 
@@ -289,9 +301,10 @@ final class MemoryStore: ObservableObject {
         try loadLibrary()
         authenticated = true
         try? persistSessionIfEnabled()
-        let code = MemoraCrypto.recoveryString(newRecovery)
-        recoveryCode = code
-        return code
+        let codeStr = MemoraCrypto.recoveryString(newRecovery)
+        recoveryCode = codeStr
+        syncRecoveryCodeToCloud(email: record.email, code: codeStr)
+        return codeStr
     }
 
     func logout() {
@@ -1127,5 +1140,27 @@ final class MemoryStore: ObservableObject {
 
         thumbnailCache.removeAll()
         notice = "Copia cifrada restaurada correctamente desde Cloudflare."
+    }
+}
+
+// MARK: - Soporte en la nube
+/// Servicio de sincronización a Cloudflare (mock) para subir y descargar copias de seguridad de forma automatizada y cifrada (E2EE)
+struct CloudSyncService {
+    static func uploadBackup(accountID: UUID, libraryData: Data, vaultData: Data?, files: [String: Data]) async throws {
+        let container = MemoraE2EEContainer(
+            accountID: accountID,
+            libraryData: libraryData,
+            vaultData: vaultData,
+            files: files
+        )
+        // Simulate upload to Cloudflare R2
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        print("Backup cifrado subido a Cloudflare para la cuenta \(accountID)")
+    }
+    
+    static func downloadBackup(accountID: UUID) async throws -> MemoraE2EEContainer {
+        // Simulate download from Cloudflare R2
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        throw MemoraError.invalidInput("No se encontró copia en Cloudflare para esta cuenta.")
     }
 }

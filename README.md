@@ -1,6 +1,6 @@
 # Memora para iPhone
 
-Proyecto **nativo SwiftUI** para abrir en Xcode. Esta entrega es Memora iOS **0.4.0**, build **4**. La interfaz sigue las referencias entregadas, usa el espacio completo y ofrece rutas funcionales desde Configuración para cuenta, contraseña, cifrado, sesiones, privacidad, biblioteca, almacenamiento, bóveda y apariencia. Se instala vacía; no contiene fotos, personas, álbumes ni contadores ficticios.
+Proyecto **nativo SwiftUI** para abrir en Xcode. Esta entrega es Memora iOS **0.5.0**, build **5** (actualización con arquitectura de diseño adaptable responsive basado en referencia 393 pt sin anchos rígidos). La interfaz sigue las referencias entregadas, usa el espacio completo y ofrece rutas funcionales desde Configuración para cuenta, contraseña, cifrado, sesiones, privacidad, biblioteca, almacenamiento, bóveda y apariencia. Se instala vacía; no contiene fotos, personas, álbumes ni contadores ficticios.
 
 ## Abrir y compilar
 

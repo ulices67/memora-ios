@@ -9,13 +9,13 @@ enum MemoraStyle {
     static let muted = Color(red: 0.62, green: 0.65, blue: 0.69)
     static let cream = Color(red: 0.95, green: 0.91, blue: 0.86)
 
-    static func title(_ size: CGFloat = 39) -> Font {
+    static func title(_ size: CGFloat = 34) -> Font {
         .system(size: size, weight: .regular, design: .serif)
     }
 
-    static let pagePadding: CGFloat = 20
-    static let panelRadius: CGFloat = 18
-    static let controlHeight: CGFloat = 52
+    static let pagePadding: CGFloat = 16
+    static let panelRadius: CGFloat = 16
+    static let controlHeight: CGFloat = 50
 }
 
 struct MemoraBackground: View {
@@ -30,12 +30,20 @@ struct MemoraHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(MemoraStyle.title()).foregroundStyle(.white)
-            Text(subtitle).font(.subheadline).foregroundStyle(MemoraStyle.muted)
+            Text(title)
+                .font(MemoraStyle.title(32))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(.white)
+            Text(subtitle)
+                .font(.subheadline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .foregroundStyle(MemoraStyle.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 20)
-        .padding(.bottom, 18)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
     }
 }
 
@@ -46,7 +54,7 @@ struct Panel<Content: View>: View {
 
     var body: some View {
         content
-            .padding(18)
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: MemoraStyle.panelRadius))
             .overlay(RoundedRectangle(cornerRadius: MemoraStyle.panelRadius).stroke(MemoraStyle.border))
@@ -57,10 +65,12 @@ struct SectionHeading: View {
     let title: String
     var body: some View {
         Text(title)
-            .font(MemoraStyle.title(25))
+            .font(MemoraStyle.title(22))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 16)
+            .padding(.top, 14)
     }
 }
 
@@ -72,14 +82,20 @@ struct EmptyMemory: View {
     var body: some View {
         Panel {
             VStack(spacing: 12) {
-                Image(systemName: symbol).font(.system(size: 34, weight: .ultraLight))
+                Image(systemName: symbol)
+                    .font(.system(size: 32, weight: .ultraLight))
                     .foregroundStyle(MemoraStyle.cream)
-                Text(title).font(MemoraStyle.title(24)).multilineTextAlignment(.center)
-                Text(message).font(.subheadline).foregroundStyle(MemoraStyle.muted)
+                Text(title)
+                    .font(MemoraStyle.title(22))
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.8)
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(MemoraStyle.muted)
                     .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 36)
+            .padding(.vertical, 28)
         }
     }
 }
@@ -91,20 +107,32 @@ struct MemoryRow: View {
     var trailing: String? = nil
 
     var body: some View {
-        HStack(spacing: 15) {
+        HStack(spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 19, weight: .regular))
-                .frame(width: 46, height: 46)
-                .background(MemoraStyle.raised, in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.body)
-                Text(detail).font(.caption).foregroundStyle(MemoraStyle.muted)
+                .font(.system(size: 18, weight: .regular))
+                .frame(width: 42, height: 42)
+                .background(MemoraStyle.raised, in: RoundedRectangle(cornerRadius: 11))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.body)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .foregroundStyle(MemoraStyle.muted)
             }
             Spacer(minLength: 4)
-            if let trailing { Text(trailing).font(.caption).foregroundStyle(MemoraStyle.muted) }
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(MemoraStyle.muted)
+            if let trailing {
+                Text(trailing)
+                    .font(.caption)
+                    .foregroundStyle(MemoraStyle.muted)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(MemoraStyle.muted)
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .frame(minHeight: MemoraStyle.controlHeight)
         .contentShape(Rectangle())
     }
@@ -116,23 +144,25 @@ struct MemoryCard: View {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: 13).fill(MemoraStyle.raised)
+            RoundedRectangle(cornerRadius: 12).fill(MemoraStyle.raised)
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
                     .frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
             } else {
-                Image(systemName: asset.kind.symbol).font(.system(size: 31, weight: .ultraLight))
+                Image(systemName: asset.kind.symbol)
+                    .font(.system(size: 28, weight: .ultraLight))
                     .foregroundStyle(MemoraStyle.muted)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             if asset.kind == .video {
                 Image(systemName: "play.fill")
-                    .padding(8).background(.black.opacity(0.6), in: Circle())
-                    .padding(8)
+                    .font(.caption2)
+                    .padding(6).background(.black.opacity(0.65), in: Circle())
+                    .padding(6)
             }
         }
         .aspectRatio(1, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 13))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityLabel(asset.name)
     }
 }
@@ -143,17 +173,26 @@ struct StatTile: View {
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Image(systemName: symbol).font(.title3)
-                .frame(width: 46, height: 46)
-                .background(MemoraStyle.raised, in: RoundedRectangle(cornerRadius: 12))
-            Text(title).font(.caption).foregroundStyle(MemoraStyle.muted)
-            Text(value).font(.title2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .medium))
+                .frame(width: 38, height: 38)
+                .background(MemoraStyle.raised, in: RoundedRectangle(cornerRadius: 10))
+            Text(title)
+                .font(.caption2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .foregroundStyle(MemoraStyle.muted)
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(MemoraStyle.border))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 15))
+        .overlay(RoundedRectangle(cornerRadius: 15).stroke(MemoraStyle.border))
     }
 }
 
@@ -162,12 +201,14 @@ struct MemoraButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
             .foregroundStyle(prominent ? MemoraStyle.background : .white)
             .frame(maxWidth: .infinity)
             .frame(minHeight: MemoraStyle.controlHeight)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 10)
             .background(prominent ? MemoraStyle.cream : MemoraStyle.raised,
-                        in: RoundedRectangle(cornerRadius: 14))
+                        in: RoundedRectangle(cornerRadius: 13))
             .opacity(configuration.isPressed ? 0.75 : 1)
     }
 }

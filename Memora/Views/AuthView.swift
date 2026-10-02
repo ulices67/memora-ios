@@ -12,28 +12,39 @@ struct AuthView: View {
     @State private var error: String?
     @State private var working = false
 
-    private enum Mode: String, CaseIterable, Hashable { case login = "Iniciar sesión", register = "Crear cuenta", recover = "Recuperar" }
+    private enum Mode: String, CaseIterable, Hashable {
+        case login = "Iniciar sesión"
+        case register = "Crear cuenta"
+        case recover = "Recuperar"
+    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 19) {
+            VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 10) {
                     Image(systemName: "square.stack.3d.up")
-                        .font(.title2).frame(width: 48, height: 48)
-                        .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 13))
-                    Text("MEMORA").font(.caption.weight(.semibold)).tracking(3)
+                        .font(.title3)
+                        .frame(width: 44, height: 44)
+                        .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                    Text("MEMORA")
+                        .font(.caption.weight(.semibold))
+                        .tracking(3)
                         .foregroundStyle(MemoraStyle.cream)
                 }
-                .padding(.top, 54)
+                .padding(.top, 28)
 
                 Text(mode == .register ? "Aquí empieza tu historia." : "Tus recuerdos, contigo.")
-                    .font(MemoraStyle.title(44))
+                    .font(MemoraStyle.title(34))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
                     .fixedSize(horizontal: false, vertical: true)
+
                 Text("Un lugar privado para guardar y volver a lo que más importa.")
+                    .font(.subheadline)
                     .foregroundStyle(MemoraStyle.muted)
 
                 Panel {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 15) {
                         if mode != .recover {
                             HStack(spacing: 6) {
                                 ForEach([Mode.login, .register], id: \.self) { candidate in
@@ -41,8 +52,11 @@ struct AuthView: View {
                                         mode = candidate
                                         error = nil
                                     }
+                                    .font(.subheadline.weight(mode == candidate ? .semibold : .regular))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
                                     .frame(maxWidth: .infinity)
-                                    .frame(minHeight: 46)
+                                    .frame(minHeight: 44)
                                     .background(mode == candidate ? MemoraStyle.raised : .clear,
                                                 in: RoundedRectangle(cornerRadius: 10))
                                 }
@@ -67,12 +81,16 @@ struct AuthView: View {
                                 .background(MemoraStyle.background, in: RoundedRectangle(cornerRadius: 12))
                         }
                         if let error {
-                            Text(error).font(.caption).foregroundStyle(.red)
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
                         }
                         Button { submit() } label: {
                             HStack {
                                 if working { ProgressView().tint(.black) }
                                 Text(mode == .login ? "Entrar a mi biblioteca" : mode == .register ? "Crear mi cuenta" : "Recuperar acceso")
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
                             }
                         }
                         .buttonStyle(MemoraButtonStyle(prominent: true))
@@ -82,12 +100,16 @@ struct AuthView: View {
                             mode = mode == .recover ? .login : .recover
                             error = nil
                         }
-                        .font(.caption).frame(maxWidth: .infinity)
+                        .font(.caption)
+                        .frame(maxWidth: .infinity)
                     }
                 }
+
                 Text("Cuenta local en este iPhone. Al entrar, la sesión puede mantenerse mediante Keychain; puedes revocarla desde Perfil → Configuración → Dispositivos y sesiones.")
-                    .font(.caption).foregroundStyle(MemoraStyle.muted)
+                    .font(.caption)
+                    .foregroundStyle(MemoraStyle.muted)
             }
+            .frame(maxWidth: 440)
             .padding(.horizontal, MemoraStyle.pagePadding)
             .padding(.bottom, 36)
             .frame(maxWidth: .infinity)
@@ -133,26 +155,35 @@ struct RecoveryCodeView: View {
     @State private var saved = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Image(systemName: "key.fill").font(.largeTitle).foregroundStyle(MemoraStyle.cream)
-            Text("Tu llave de regreso").font(MemoraStyle.title())
-            Text("Guarda este código fuera de Memora. Si olvidas la contraseña, será la única forma local de recuperar tu biblioteca.")
-                .foregroundStyle(MemoraStyle.muted)
-            Panel {
-                Text(store.recoveryCode ?? "")
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 15)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Image(systemName: "key.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(MemoraStyle.cream)
+                Text("Tu llave de regreso")
+                    .font(MemoraStyle.title(32))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text("Guarda este código fuera de Memora. Si olvidas la contraseña, será la única forma local de recuperar tu biblioteca.")
+                    .font(.subheadline)
+                    .foregroundStyle(MemoraStyle.muted)
+                Panel {
+                    Text(store.recoveryCode ?? "")
+                        .font(.system(.body, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                }
+                Toggle("Ya guardé mi código en un lugar seguro", isOn: $saved)
+                    .font(.subheadline)
+                Button("Entrar a mi biblioteca") { store.recoveryCode = nil }
+                    .buttonStyle(MemoraButtonStyle(prominent: true))
+                    .disabled(!saved)
             }
-            Toggle("Ya guardé mi código en un lugar seguro", isOn: $saved)
-            Button("Entrar a mi biblioteca") { store.recoveryCode = nil }
-                .buttonStyle(MemoraButtonStyle(prominent: true))
-                .disabled(!saved)
+            .frame(maxWidth: 440)
+            .padding(22)
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: 470)
-        .padding(25)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .memoraPage()
     }
 }

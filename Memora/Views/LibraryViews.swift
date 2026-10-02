@@ -33,14 +33,19 @@ struct ImportActions: View {
     @State private var showingFiles = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 20,
                          matching: .any(of: [.images, .videos])) {
                 Label("Fotos y videos", systemImage: "photo.on.rectangle")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .buttonStyle(MemoraButtonStyle(prominent: true))
+
             Button { showingFiles = true } label: {
                 Label("Archivos", systemImage: "doc.badge.plus")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .buttonStyle(MemoraButtonStyle())
         }
@@ -75,7 +80,7 @@ struct HomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 MemoraHeader(title: "Memora", subtitle: "Tu biblioteca privada")
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     StatTile(symbol: "photo", title: "Fotos", value: "\(store.activeAssets.filter { $0.kind == .photo }.count)")
                     StatTile(symbol: "video", title: "Videos", value: "\(store.activeAssets.filter { $0.kind == .video }.count)")
                     StatTile(symbol: "person.2", title: "Personas", value: "\(store.library.people.count)")
@@ -87,14 +92,14 @@ struct HomeView: View {
                     EmptyMemory(symbol: "rectangle.stack", title: "Todavía no hay álbumes",
                                 message: "Crea uno desde Biblioteca para organizar tus recuerdos.")
                 } else {
-                    ScrollView(.horizontal) {
+                    ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 11) {
                             ForEach(store.library.albums.sorted { $0.createdAt > $1.createdAt }.prefix(5)) { album in
                                 NavigationLink {
                                     AlbumDetailView(store: store, album: album)
                                 } label: {
                                     AlbumTile(store: store, album: album)
-                                        .frame(width: 148)
+                                        .frame(width: 144)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -110,7 +115,7 @@ struct HomeView: View {
                     AssetGrid(store: store, assets: recent)
                 }
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, MemoraStyle.pagePadding)
             .padding(.bottom, 28)
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -134,7 +139,7 @@ struct LibraryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 17) {
                 MemoraHeader(title: "Biblioteca", subtitle: "Organiza y explora tus recuerdos")
-                ScrollView(.horizontal) {
+                ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         filterChip("Todo", selected: filter == nil) { filter = nil }
                         ForEach(AssetKind.allCases, id: \.self) { kind in
@@ -152,7 +157,7 @@ struct LibraryView: View {
                     EmptyMemory(symbol: "rectangle.stack", title: "Tus álbumes aparecerán aquí",
                                 message: "Un archivo puede estar en varios álbumes sin copiarlo.")
                 } else {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)], spacing: 12) {
                         ForEach(store.library.albums) { album in
                             NavigationLink {
                                 AlbumDetailView(store: store, album: album)
@@ -169,6 +174,7 @@ struct LibraryView: View {
                 ForEach(store.library.sections) { section in
                     Panel {
                         Label(section.name, systemImage: section.symbol)
+                            .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -178,7 +184,7 @@ struct LibraryView: View {
                                 message: "Importa fotos, videos, audio o documentos para llenar tu biblioteca.")
                 } else { AssetGrid(store: store, assets: assets) }
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, MemoraStyle.pagePadding)
             .padding(.bottom, 28)
         }
         .alert("Nuevo álbum", isPresented: $addingAlbum) {
@@ -202,9 +208,15 @@ struct LibraryView: View {
     }
 
     private func filterChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Text(title).font(.subheadline).padding(.horizontal, 18).padding(.vertical, 10) }
-            .foregroundStyle(selected ? MemoraStyle.background : .white)
-            .background(selected ? MemoraStyle.cream : MemoraStyle.raised, in: Capsule())
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline)
+                .lineLimit(1)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+        }
+        .foregroundStyle(selected ? MemoraStyle.background : .white)
+        .background(selected ? MemoraStyle.cream : MemoraStyle.raised, in: Capsule())
     }
 }
 
@@ -217,16 +229,23 @@ struct AlbumTile: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             if let asset = contents.first {
                 MemoryCard(asset: asset, image: store.thumbnail(for: asset))
             } else {
-                RoundedRectangle(cornerRadius: 13).fill(MemoraStyle.raised)
-                    .overlay(Image(systemName: "rectangle.stack").font(.largeTitle).foregroundStyle(MemoraStyle.muted))
+                RoundedRectangle(cornerRadius: 12).fill(MemoraStyle.raised)
+                    .overlay(Image(systemName: "rectangle.stack").font(.title).foregroundStyle(MemoraStyle.muted))
                     .aspectRatio(1, contentMode: .fit)
             }
-            Text(album.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-            Text("\(contents.count) elementos").font(.caption).foregroundStyle(MemoraStyle.muted)
+            Text(album.name)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+            Text("\(contents.count) elementos")
+                .font(.caption)
+                .lineLimit(1)
+                .foregroundStyle(MemoraStyle.muted)
         }
     }
 }
@@ -236,8 +255,14 @@ struct AssetGrid: View {
     let assets: [MemoryAsset]
     var secure = false
 
+    private var columns: [GridItem] {
+        [
+            GridItem(.adaptive(minimum: 104, maximum: 140), spacing: 6)
+        ]
+    }
+
     var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 7), count: 3), spacing: 7) {
+        LazyVGrid(columns: columns, spacing: 6) {
             ForEach(assets) { asset in
                 NavigationLink {
                     AssetDetailView(store: store, assetID: asset.id, secure: secure)
@@ -269,7 +294,7 @@ struct AlbumDetailView: View {
                                 message: "Abre un archivo y asígnalo a este álbum.")
                 } else { AssetGrid(store: store, assets: assets, secure: secure) }
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .navigationBarTitleDisplayMode(.inline)
         .memoraPage()
@@ -294,16 +319,19 @@ struct AssetDetailView: View {
     var body: some View {
         ScrollView {
             if let asset {
-                VStack(alignment: .leading, spacing: 17) {
+                VStack(alignment: .leading, spacing: 16) {
                     if let image = store.thumbnail(for: asset, secure: secure) {
                         Image(uiImage: image).resizable().scaledToFit()
                             .frame(maxWidth: .infinity).frame(maxHeight: 480)
-                            .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+                            .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 16))
                     } else {
                         EmptyMemory(symbol: asset.kind.symbol, title: asset.name,
                                     message: "Archivo original cifrado en este iPhone.")
                     }
-                    Text(asset.name).font(MemoraStyle.title(25))
+                    Text(asset.name)
+                        .font(MemoraStyle.title(24))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
                     Text("\(asset.size.memorySize) · \(asset.addedAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption).foregroundStyle(MemoraStyle.muted)
                     VStack(spacing: 10) {
@@ -361,7 +389,7 @@ struct AssetDetailView: View {
                         .foregroundStyle(.red)
                     }
                 }
-                .padding(18)
+                .padding(MemoraStyle.pagePadding)
             }
         }
         .sheet(isPresented: $showingPreview, onDismiss: cleanup) {
@@ -433,21 +461,26 @@ struct PeopleView: View {
                         Panel {
                             HStack(spacing: 14) {
                                 Image(systemName: "person.crop.circle")
-                                    .font(.system(size: 39, weight: .ultraLight))
-                                VStack(alignment: .leading) {
-                                    Text(person.name).font(MemoraStyle.title(23))
+                                    .font(.system(size: 38, weight: .ultraLight))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(person.name)
+                                        .font(MemoraStyle.title(22))
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
                                     Text("\(store.activeAssets.filter { $0.personIDs.contains(person.id) }.count) archivos")
                                         .font(.caption).foregroundStyle(MemoraStyle.muted)
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(MemoraStyle.muted)
                             }
                         }
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .alert("Añadir persona", isPresented: $adding) {
             TextField("Nombre", text: $name)
@@ -485,7 +518,7 @@ struct PersonDetailView: View {
                                 message: "Abre un archivo y selecciona esta persona.")
                 } else { AssetGrid(store: store, assets: assets) }
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .memoraPage()
     }
@@ -510,7 +543,7 @@ struct SearchView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 17) {
+            VStack(alignment: .leading, spacing: 16) {
                 MemoraHeader(title: "Buscar", subtitle: "Encuentra personas, lugares y momentos")
                 TextField("Buscar en tu biblioteca…", text: $query)
                     .textFieldStyle(.roundedBorder)
@@ -529,7 +562,7 @@ struct SearchView: View {
                     AssetGrid(store: store, assets: results)
                 }
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .toolbar(.hidden, for: .navigationBar)
         .memoraPage()

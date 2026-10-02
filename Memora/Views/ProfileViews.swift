@@ -10,25 +10,31 @@ struct ProfileView: View {
                 HStack(alignment: .top) {
                     MemoraHeader(title: "Perfil", subtitle: "Tu cuenta y tu biblioteca")
                     Image(systemName: "icloud.slash")
-                        .font(.title3).foregroundStyle(MemoraStyle.muted)
-                        .frame(width: 41, height: 41)
+                        .font(.body).foregroundStyle(MemoraStyle.muted)
+                        .frame(width: 38, height: 38)
                         .background(MemoraStyle.surface, in: Circle())
                         .accessibilityLabel("Sin sincronización en la nube")
                     NavigationLink { SettingsView(store: store) } label: {
                         Image(systemName: "gearshape")
-                            .font(.title3).frame(width: 41, height: 41)
+                            .font(.body).frame(width: 38, height: 38)
                             .background(MemoraStyle.surface, in: Circle())
                     }
                     .accessibilityLabel("Abrir configuración")
                 }
                 Panel {
-                    HStack(spacing: 18) {
+                    HStack(spacing: 16) {
                         Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 76, weight: .ultraLight))
+                            .font(.system(size: 64, weight: .ultraLight))
                             .foregroundStyle(MemoraStyle.cream)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(store.account?.name ?? "").font(MemoraStyle.title(31))
-                            Text(store.account?.email ?? "").font(.subheadline)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(store.account?.name ?? "")
+                                .font(MemoraStyle.title(26))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                            Text(store.account?.email ?? "")
+                                .font(.subheadline)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                                 .foregroundStyle(MemoraStyle.muted)
                             if let created = store.account?.createdAt {
                                 Text("Miembro desde \(created.formatted(.dateTime.year()))")
@@ -37,7 +43,7 @@ struct ProfileView: View {
                         }
                     }
                 }
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     StatTile(symbol: "rectangle.stack", title: "Álbumes", value: "\(store.library.albums.count)")
                     StatTile(symbol: "person.2", title: "Personas", value: "\(store.library.people.count)")
                     StatTile(symbol: "heart", title: "Favoritos", value: "\(store.activeAssets.filter(\.favorite).count)")
@@ -65,7 +71,7 @@ struct ProfileView: View {
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 18)
+            .padding(.horizontal, MemoraStyle.pagePadding)
             .padding(.bottom, 28)
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -176,10 +182,10 @@ struct SettingsView: View {
                         }.buttonStyle(.plain)
                     }
                 }
-                Text("Memora para iOS · 0.4.0 (4) · Los archivos permanecen en este dispositivo.")
+                Text("Memora para iOS · 0.5.0 (5) · Los archivos permanecen en este dispositivo.")
                     .font(.caption).foregroundStyle(MemoraStyle.muted).padding(.top, 10)
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .navigationBarTitleDisplayMode(.inline)
         .memoraPage()
@@ -200,13 +206,16 @@ struct StorageView: View {
                 MemoraHeader(title: "Almacenamiento", subtitle: "Controla el espacio de tu biblioteca")
                 Panel {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(store.usedBytes.memorySize).font(MemoraStyle.title(36))
+                        Text(store.usedBytes.memorySize)
+                            .font(MemoraStyle.title(32))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                         Text("Usados por Memora en originales importados")
                             .font(.subheadline).foregroundStyle(MemoraStyle.muted)
                         Text("No hay cuota remota: Cloudflare Sync no está conectado.")
                             .font(.caption).foregroundStyle(MemoraStyle.muted)
                     }
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                 }
                 SectionHeading(title: "Uso por tipo")
                 HStack(spacing: 8) {
@@ -258,10 +267,8 @@ struct StorageView: View {
                                   detail: "No configurada en esta versión")
                     }
                 }
-                Text("El tamaño de la bóveda se suma cuando está desbloqueada. iOS puede usar espacio adicional para archivos temporales del sistema.")
-                    .font(.caption).foregroundStyle(MemoraStyle.muted)
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .navigationBarTitleDisplayMode(.inline)
         .memoraPage()
@@ -274,35 +281,48 @@ struct TrashView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 15) {
-                MemoraHeader(title: "Papelera", subtitle: "Recupera o elimina archivos")
+            VStack(alignment: .leading, spacing: 16) {
+                MemoraHeader(title: "Papelera", subtitle: "\(store.trash.count) archivos")
                 if store.trash.isEmpty {
-                    EmptyMemory(symbol: "trash", title: "La papelera está vacía",
-                                message: "Los archivos eliminados aparecerán aquí.")
-                }
-                ForEach(store.trash) { asset in
-                    Panel {
-                        HStack {
-                            Image(systemName: asset.kind.symbol).frame(width: 35)
-                            VStack(alignment: .leading) {
-                                Text(asset.name).lineLimit(1)
-                                Text(asset.size.memorySize).font(.caption).foregroundStyle(MemoraStyle.muted)
-                            }
-                            Spacer()
-                            Menu {
-                                Button("Restaurar") {
-                                    do { try store.restore(asset.id) }
+                    EmptyMemory(symbol: "trash", title: "Papelera vacía",
+                                message: "Los archivos eliminados permanecen aquí antes de borrarse definitivamente.")
+                } else {
+                    Button(role: .destructive) {
+                        do { try store.emptyTrash() }
+                        catch { store.notice = error.localizedDescription }
+                    } label: {
+                        Text("Vaciar papelera")
+                    }
+                    .buttonStyle(MemoraButtonStyle())
+                    ForEach(store.trash) { asset in
+                        Panel {
+                            HStack(spacing: 12) {
+                                Image(systemName: asset.kind.symbol)
+                                    .font(.title3).foregroundStyle(MemoraStyle.muted)
+                                VStack(alignment: .leading) {
+                                    Text(asset.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                    Text(asset.size.memorySize).font(.caption).foregroundStyle(MemoraStyle.muted)
+                                }
+                                Spacer()
+                                Button {
+                                    do { try store.restoreFromTrash(asset.id) }
                                     catch { store.notice = error.localizedDescription }
+                                } label: {
+                                    Image(systemName: "arrow.uturn.backward.circle")
                                 }
-                                Button("Eliminar definitivamente", role: .destructive) {
+                                .accessibilityLabel("Restaurar")
+                                Button(role: .destructive) {
                                     pendingDelete = asset
+                                } label: {
+                                    Image(systemName: "trash")
                                 }
-                            } label: { Image(systemName: "ellipsis") }
+                                .accessibilityLabel("Eliminar definitivamente")
+                            }
                         }
                     }
                 }
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .confirmationDialog("¿Eliminar este archivo para siempre?", isPresented: Binding(
             get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }
@@ -390,10 +410,13 @@ struct VaultView: View {
                     }
                 } else {
                     Panel {
-                        HStack(spacing: 15) {
+                        HStack(spacing: 14) {
                             Image(systemName: "checkmark.shield.fill").font(.title).foregroundStyle(.mint)
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("Protegida con una clave diferente").font(MemoraStyle.title(22))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Protegida con una clave diferente")
+                                    .font(MemoraStyle.title(20))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
                                 Text("Se bloquea al salir de la app o tras 15 minutos.")
                                     .font(.caption).foregroundStyle(MemoraStyle.muted)
                             }
@@ -419,7 +442,7 @@ struct VaultView: View {
                 }
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
-            .padding(18)
+            .padding(MemoraStyle.pagePadding)
         }
         .sheet(isPresented: $showRecoverySheet) {
             VaultRecoverySheet(code: newRecoveryCode) {
@@ -434,14 +457,17 @@ struct VaultView: View {
 
     private func lockPanel(_ title: String, description: String) -> some View {
         Panel {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 Image(systemName: "lock.shield")
-                    .font(.system(size: 43, weight: .ultraLight))
+                    .font(.system(size: 38, weight: .ultraLight))
                     .foregroundStyle(MemoraStyle.cream)
-                Text(title).font(MemoraStyle.title(25))
+                Text(title)
+                    .font(MemoraStyle.title(22))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 Text(description).font(.subheadline).foregroundStyle(MemoraStyle.muted)
             }
-            .padding(.vertical, 14)
+            .padding(.vertical, 10)
         }
     }
 }
@@ -453,19 +479,22 @@ private struct VaultRecoverySheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Código de la bóveda").font(MemoraStyle.title(30))
+            Text("Código de la bóveda").font(MemoraStyle.title(28))
             Text("Guárdalo fuera de Memora. Es distinto del código de recuperación de la cuenta.")
+                .font(.subheadline)
                 .foregroundStyle(MemoraStyle.muted)
             Text(code).font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
                 .padding().frame(maxWidth: .infinity)
                 .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 14))
             Toggle("Ya lo guardé en un lugar seguro", isOn: $saved)
+                .font(.subheadline)
             Button("Continuar", action: close)
                 .buttonStyle(MemoraButtonStyle(prominent: true))
                 .disabled(!saved)
             Spacer()
         }
+        .frame(maxWidth: 440)
         .padding(22)
         .memoraPage()
         .interactiveDismissDisabled()
@@ -597,10 +626,10 @@ private struct InfoPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                MemoraHeader(title: title, subtitle: "Memora 0.4")
+                MemoraHeader(title: title, subtitle: "Memora 0.5")
                 Panel {
                     VStack(alignment: .leading, spacing: 16) {
-                        Image(systemName: symbol).font(.system(size: 38)).foregroundStyle(MemoraStyle.cream)
+                        Image(systemName: symbol).font(.system(size: 36)).foregroundStyle(MemoraStyle.cream)
                         Text(message).foregroundStyle(MemoraStyle.muted)
                     }.padding(.vertical, 8)
                 }

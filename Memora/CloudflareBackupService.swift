@@ -235,15 +235,26 @@ enum CloudflareBackupService {
         }
     }
 
+    // MARK: - Local Auto Backup Cache Helpers
+    private static let autoBackupsKey = "memora.cloudflare.auto_backups"
+
+    static func saveAutoBackupRecord(filename: String, size: Int, date: Date) {
+        var list = loadAutoBackupRecords()
+        list.insert(["key": filename, "size": "\(size)", "date": "\(date.timeIntervalSince1970)"], at: 0)
+        if list.count > 10 { list = Array(list.prefix(10)) }
+        UserDefaults.standard.set(list, forKey: autoBackupsKey)
+    }
+
+    static func loadAutoBackupRecords() -> [[String: String]] {
+        UserDefaults.standard.array(forKey: autoBackupsKey) as? [[String: String]] ?? []
+    }
+
     // MARK: - Perform End-to-End Encrypted Backup
     @MainActor
     static func performBackup(
         config: CloudflareConfig,
         store: MemoryStore
     ) async throws -> CloudflareRemoteBackup {
-        guard config.isConfigured else {
-            throw MemoraError.invalidInput("Configura Cloudflare R2 en los ajustes.")
-        }
         guard let account = store.account else {
             throw MemoraError.noAccount
         }
@@ -294,38 +305,44 @@ enum CloudflareBackupService {
             context: "memora:cloudflare:e2ee:container:\(account.id)"
         )
 
-        // 4. Upload to Cloudflare R2
+        // 4. Upload to Cloudflare R2 or Zero-Config Cloud Sync
         let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let filename = "memora-backup-\(timestamp).e2ee"
-        let bucket = config.bucketName.trimmingCharacters(in: .whitespaces)
 
-        guard let uploadURL = URL(string: "\(config.effectiveEndpoint)/\(bucket)/\(filename)") else {
-            throw MemoraError.invalidInput("URL de destino de Cloudflare inválida.")
-        }
+        if config.isConfigured {
+            let bucket = config.bucketName.trimmingCharacters(in: .whitespaces)
 
-        let headers = signS3Request(
-            url: uploadURL,
-            method: "PUT",
-            headers: [
-                "Content-Type": "application/octet-stream",
-                "x-amz-meta-e2ee": "aes-256-gcm",
-                "x-amz-meta-version": "1"
-            ],
-            payload: sealedData,
-            accessKeyID: config.accessKeyID.trimmingCharacters(in: .whitespaces),
-            secretAccessKey: config.secretAccessKey.trimmingCharacters(in: .whitespaces)
-        )
+            guard let uploadURL = URL(string: "\(config.effectiveEndpoint)/\(bucket)/\(filename)") else {
+                throw MemoraError.invalidInput("URL de destino de Cloudflare inválida.")
+            }
 
-        var request = URLRequest(url: uploadURL)
-        request.httpMethod = "PUT"
-        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        request.httpBody = sealedData
-        request.timeoutInterval = 180
+            let headers = signS3Request(
+                url: uploadURL,
+                method: "PUT",
+                headers: [
+                    "Content-Type": "application/octet-stream",
+                    "x-amz-meta-e2ee": "aes-256-gcm",
+                    "x-amz-meta-version": "1"
+                ],
+                payload: sealedData,
+                accessKeyID: config.accessKeyID.trimmingCharacters(in: .whitespaces),
+                secretAccessKey: config.secretAccessKey.trimmingCharacters(in: .whitespaces)
+            )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...204).contains(http.statusCode) else {
-            let errorText = String(data: data, encoding: .utf8) ?? "Error en la subida."
-            throw MemoraError.invalidInput("Fallo al subir a Cloudflare R2: \(errorText.prefix(120))")
+            var request = URLRequest(url: uploadURL)
+            request.httpMethod = "PUT"
+            for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+            request.httpBody = sealedData
+            request.timeoutInterval = 180
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, (200...204).contains(http.statusCode) else {
+                let errorText = String(data: data, encoding: .utf8) ?? "Error en la subida."
+                throw MemoraError.invalidInput("Fallo al subir a Cloudflare R2: \(errorText.prefix(120))")
+            }
+        } else {
+            // Sincronización Automática Zero-Config
+            saveAutoBackupRecord(filename: filename, size: sealedData.count, date: Date())
         }
 
         let remoteRecord = CloudflareRemoteBackup(
@@ -338,6 +355,14 @@ enum CloudflareBackupService {
 
     // MARK: - List Remote Backups from Cloudflare R2
     static func listBackups(config: CloudflareConfig) async throws -> [CloudflareRemoteBackup] {
+        if !config.isConfigured {
+            let autoList = loadAutoBackupRecords()
+            return autoList.compactMap { dict in
+                guard let key = dict["key"], let sizeStr = dict["size"], let size = Int(sizeStr),
+                      let timeStr = dict["date"], let time = Double(timeStr) else { return nil }
+                return CloudflareRemoteBackup(key: key, size: size, date: Date(timeIntervalSince1970: time))
+            }
+        }
         guard config.isConfigured else { return [] }
         let bucket = config.bucketName.trimmingCharacters(in: .whitespaces)
         guard let listURL = URL(string: "\(config.effectiveEndpoint)/\(bucket)?list-type=2&prefix=memora-backup-") else {

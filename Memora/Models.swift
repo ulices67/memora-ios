@@ -119,6 +119,8 @@ struct FaceMatchResult: Identifiable, Hashable {
     let zone: ConfidenceZone
     let albumCount: Int
     let assetCount: Int
+    var relatedSectionNames: [String] = []
+    var relatedAlbumNames: [String] = []
 
     enum ConfidenceZone: String, Hashable {
         case high = "Alta confianza"

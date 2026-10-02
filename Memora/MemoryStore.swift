@@ -852,6 +852,120 @@ final class MemoryStore: ObservableObject {
         try saveLibrary()
     }
 
+    func facesInAsset(_ assetID: UUID) -> [DetectedFace] {
+        library.detectedFaces.filter { $0.assetID == assetID }
+    }
+
+    func albumsForPerson(personID: UUID) -> [MemoryAlbum] {
+        let personAssets = activeAssets.filter { $0.personIDs.contains(personID) }
+        return library.albums.filter { album in
+            personAssets.contains { $0.albumIDs.contains(album.id) }
+        }
+    }
+
+    func sectionsForPerson(personID: UUID) -> [MemorySection] {
+        let personAlbums = albumsForPerson(personID: personID)
+        let sectionIDs = Set(personAlbums.compactMap(\.sectionID))
+        return library.sections.filter { sectionIDs.contains($0.id) }
+    }
+
+    func tagFaceInAsset(
+        faceID: UUID,
+        assetID: UUID,
+        personID: UUID?,
+        newPersonName: String? = nil,
+        learnAsExemplar: Bool = true
+    ) throws {
+        var targetPersonID = personID
+
+        if let newPersonName, !newPersonName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let newPerson = MemoryPerson(
+                id: UUID(),
+                name: newPersonName.trimmingCharacters(in: .whitespacesAndNewlines),
+                coverAssetID: assetID,
+                exemplarFaceIDs: [faceID]
+            )
+            library.people.append(newPerson)
+            targetPersonID = newPerson.id
+        }
+
+        guard let finalPersonID = targetPersonID,
+              let pIdx = library.people.firstIndex(where: { $0.id == finalPersonID }) else {
+            // Si personID es nil y no hay nuevo nombre, desasignar
+            if let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }) {
+                let oldPersonID = library.detectedFaces[fIdx].personID
+                library.detectedFaces[fIdx].personID = nil
+                library.detectedFaces[fIdx].reviewStatus = .unassigned
+                if let oldPersonID, let oldPIdx = library.people.firstIndex(where: { $0.id == oldPersonID }) {
+                    library.people[oldPIdx].exemplarFaceIDs.removeAll { $0 == faceID }
+                    updatePersonPrototype(personID: oldPersonID)
+                }
+            }
+            try saveLibrary()
+            return
+        }
+
+        // Asignar el rostro al asset y personID
+        if let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }) {
+            let oldPersonID = library.detectedFaces[fIdx].personID
+            library.detectedFaces[fIdx].personID = finalPersonID
+            library.detectedFaces[fIdx].reviewStatus = .confirmed
+            if let oldPersonID, oldPersonID != finalPersonID,
+               let oldPIdx = library.people.firstIndex(where: { $0.id == oldPersonID }) {
+                library.people[oldPIdx].exemplarFaceIDs.removeAll { $0 == faceID }
+                updatePersonPrototype(personID: oldPersonID)
+            }
+        }
+
+        try assign(assetID, to: finalPersonID)
+
+        if learnAsExemplar {
+            if !library.people[pIdx].exemplarFaceIDs.contains(faceID) {
+                library.people[pIdx].exemplarFaceIDs.append(faceID)
+            }
+            updatePersonPrototype(personID: finalPersonID)
+            reclassifyAllFacesForPerson(personID: finalPersonID)
+        }
+
+        try saveLibrary()
+    }
+
+    func reclassifyAllFacesForPerson(personID: UUID) {
+        guard let person = library.people.first(where: { $0.id == personID }) else { return }
+        let catalog = facesCatalog
+
+        for fIdx in library.detectedFaces.indices {
+            let face = library.detectedFaces[fIdx]
+            guard face.personID != personID, face.quality >= FaceEngine.qualityGateMinimum else { continue }
+            
+            var scores: [Double] = []
+            if let proto = person.prototype {
+                scores.append(FaceEngine.cosineSimilarity(face.embedding, proto))
+            }
+            for exemplarID in person.exemplarFaceIDs.prefix(20) {
+                if let ex = catalog[exemplarID] {
+                    scores.append(FaceEngine.cosineSimilarity(face.embedding, ex.embedding))
+                }
+            }
+            let maxScore = scores.max() ?? 0.0
+            if maxScore >= FaceEngine.thresholdAccept {
+                library.detectedFaces[fIdx].personID = personID
+                library.detectedFaces[fIdx].confidence = maxScore
+                library.detectedFaces[fIdx].reviewStatus = .confirmed
+                try? assign(face.assetID, to: personID)
+            } else if maxScore >= FaceEngine.thresholdReview {
+                library.detectedFaces[fIdx].personID = personID
+                library.detectedFaces[fIdx].confidence = maxScore
+                library.detectedFaces[fIdx].reviewStatus = .suggested
+                if let pIdx = library.people.firstIndex(where: { $0.id == personID }) {
+                    if !library.people[pIdx].reviewCandidateAssetIDs.contains(face.assetID) {
+                        library.people[pIdx].reviewCandidateAssetIDs.append(face.assetID)
+                    }
+                }
+            }
+        }
+    }
+
     func recomputeClusters() {
         let unassigned = library.detectedFaces.filter { $0.personID == nil }
         library.clusters = FaceEngine.clusterFaces(unassignedFaces: unassigned)
@@ -862,6 +976,7 @@ final class MemoryStore: ObservableObject {
             queryImage: image,
             people: library.people,
             albums: library.albums,
+            sections: library.sections,
             assets: activeAssets,
             facesCatalog: facesCatalog
         )

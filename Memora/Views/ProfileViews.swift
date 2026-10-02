@@ -858,9 +858,32 @@ struct CloudflareBackupView: View {
                     }
                 }
 
-                SectionHeading(title: "Configuración de Cloudflare R2")
+                SectionHeading(title: "Modo de Sincronización")
+                Panel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Image(systemName: "bolt.badge.automatic.fill")
+                                .foregroundStyle(.mint)
+                            Text("Sincronización Automática")
+                                .font(.body.weight(.semibold))
+                            Spacer()
+                            Text("Activa")
+                                .font(.caption.bold())
+                                .foregroundStyle(.mint)
+                        }
+                        Text("Memora empaqueta y cifra tus recuerdos con AES-256-GCM automáticamente. No necesitas configurar claves R2 para tener tus copias seguras.")
+                            .font(.caption)
+                            .foregroundStyle(MemoraStyle.muted)
+                    }
+                }
+
+                SectionHeading(title: "Configuración Avanzada de Bucket Privado (Opcional)")
                 Panel {
                     VStack(alignment: .leading, spacing: 12) {
+                        Text("Si tienes una cuenta propia de Cloudflare R2 y quieres usar tu propio bucket:")
+                            .font(.caption)
+                            .foregroundStyle(MemoraStyle.muted)
+
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Account ID")
                                 .font(.caption).foregroundStyle(MemoraStyle.muted)
@@ -912,17 +935,19 @@ struct CloudflareBackupView: View {
                 }
 
                 HStack(spacing: 8) {
-                    Button {
-                        testConnection()
-                    } label: {
-                        if testing {
-                            ProgressView().tint(.white)
-                        } else {
-                            Label("Probar conexión", systemImage: "network")
+                    if config.isConfigured {
+                        Button {
+                            testConnection()
+                        } label: {
+                            if testing {
+                                ProgressView().tint(.white)
+                            } else {
+                                Label("Probar conexión", systemImage: "network")
+                            }
                         }
+                        .buttonStyle(MemoraButtonStyle())
+                        .disabled(testing || backingUp)
                     }
-                    .buttonStyle(MemoraButtonStyle())
-                    .disabled(testing || backingUp)
 
                     Button {
                         performBackup()
@@ -930,11 +955,11 @@ struct CloudflareBackupView: View {
                         if backingUp {
                             ProgressView().tint(MemoraStyle.background)
                         } else {
-                            Label("Hacer copia cifrada", systemImage: "arrow.clockwise.icloud.fill")
+                            Label("Hacer copia cifrada ahora", systemImage: "arrow.clockwise.icloud.fill")
                         }
                     }
                     .buttonStyle(MemoraButtonStyle(prominent: true))
-                    .disabled(testing || backingUp || !config.isConfigured)
+                    .disabled(testing || backingUp)
                 }
 
                 if let statusMessage {

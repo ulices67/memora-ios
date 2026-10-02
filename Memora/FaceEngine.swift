@@ -227,6 +227,7 @@ enum FaceEngine {
         queryImage: UIImage,
         people: [MemoryPerson],
         albums: [MemoryAlbum],
+        sections: [MemorySection] = [],
         assets: [MemoryAsset],
         facesCatalog: [UUID: DetectedFace]
     ) async -> [FaceMatchResult] {
@@ -258,17 +259,22 @@ enum FaceEngine {
             }()
 
             let personAssets = assets.filter { $0.personIDs.contains(person.id) }
-            let personAlbumCount = albums.filter { album in
+            let personAlbums = albums.filter { album in
                 personAssets.contains { $0.albumIDs.contains(album.id) }
-            }.count
+            }
+            let sectionIDs = Set(personAlbums.compactMap(\.sectionID))
+            let relatedSections = sections.filter { sectionIDs.contains($0.id) }.map(\.name)
+            let relatedAlbums = personAlbums.map(\.name)
 
             results.append(
                 FaceMatchResult(
                     person: person,
                     confidence: score,
                     zone: zone,
-                    albumCount: personAlbumCount,
-                    assetCount: personAssets.count
+                    albumCount: personAlbums.count,
+                    assetCount: personAssets.count,
+                    relatedSectionNames: relatedSections,
+                    relatedAlbumNames: relatedAlbums
                 )
             )
         }

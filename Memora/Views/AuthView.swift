@@ -27,7 +27,7 @@ struct AuthView: View {
                 .padding(.top, 54)
 
                 Text(mode == .register ? "Aquí empieza tu historia." : "Tus recuerdos, contigo.")
-                    .font(MemoraStyle.title(40))
+                    .font(MemoraStyle.title(44))
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Un lugar privado para guardar y volver a lo que más importa.")
                     .foregroundStyle(MemoraStyle.muted)
@@ -42,7 +42,7 @@ struct AuthView: View {
                                         error = nil
                                     }
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 11)
+                                    .frame(minHeight: 46)
                                     .background(mode == candidate ? MemoraStyle.raised : .clear,
                                                 in: RoundedRectangle(cornerRadius: 10))
                                 }
@@ -57,11 +57,13 @@ struct AuthView: View {
                         if mode == .recover { input("Código de recuperación", text: $recovery) }
                         SecureField(mode == .recover ? "Contraseña nueva" : "Contraseña", text: $password)
                             .textContentType(mode == .login ? .password : .newPassword)
-                            .padding(14)
+                            .frame(minHeight: MemoraStyle.controlHeight)
+                            .padding(.horizontal, 14)
                             .background(MemoraStyle.background, in: RoundedRectangle(cornerRadius: 12))
                         if mode == .register {
                             SecureField("Confirmar contraseña", text: $confirmation)
-                                .padding(14)
+                                .frame(minHeight: MemoraStyle.controlHeight)
+                                .padding(.horizontal, 14)
                                 .background(MemoraStyle.background, in: RoundedRectangle(cornerRadius: 12))
                         }
                         if let error {
@@ -83,11 +85,11 @@ struct AuthView: View {
                         .font(.caption).frame(maxWidth: .infinity)
                     }
                 }
-                Text("Cuenta local en este iPhone. Memora no envía correos ni sincroniza archivos entre dispositivos.")
+                Text("Cuenta local en este iPhone. Al entrar, la sesión puede mantenerse mediante Keychain; puedes revocarla desde Perfil → Configuración → Dispositivos y sesiones.")
                     .font(.caption).foregroundStyle(MemoraStyle.muted)
             }
-            .frame(maxWidth: 460)
-            .padding(24)
+            .padding(.horizontal, MemoraStyle.pagePadding)
+            .padding(.bottom, 36)
             .frame(maxWidth: .infinity)
         }
         .memoraPage()
@@ -97,7 +99,8 @@ struct AuthView: View {
         TextField(placeholder, text: text)
             .keyboardType(keyboard)
             .textContentType(placeholder == "Correo electrónico" ? .emailAddress : .name)
-            .padding(14)
+            .frame(minHeight: MemoraStyle.controlHeight)
+            .padding(.horizontal, 14)
             .background(MemoraStyle.background, in: RoundedRectangle(cornerRadius: 12))
     }
 
@@ -119,9 +122,7 @@ struct AuthView: View {
             password = ""
             confirmation = ""
             recovery = ""
-        } catch let err {
-            self.error = err.localizedDescription
-        }
+        } catch { error = error.localizedDescription }
     }
 }
 

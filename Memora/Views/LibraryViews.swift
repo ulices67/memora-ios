@@ -44,6 +44,8 @@ struct ImportActions: View {
             }
             .buttonStyle(MemoraButtonStyle())
         }
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
         .onChange(of: selectedPhotos) { _, items in
             guard !items.isEmpty else { return }
             Task {
@@ -283,7 +285,10 @@ struct AssetDetailView: View {
     @State private var showingShare = false
 
     private var asset: MemoryAsset? {
-        (secure ? store.privateLibrary?.assets : store.library.assets)?.first { $0.id == assetID }
+        if secure {
+            return store.privateLibrary?.assets.first { $0.id == assetID }
+        }
+        return store.library.assets.first { $0.id == assetID }
     }
 
     var body: some View {
@@ -301,27 +306,33 @@ struct AssetDetailView: View {
                     Text(asset.name).font(MemoraStyle.title(25))
                     Text("\(asset.size.memorySize) · \(asset.addedAt.formatted(date: .abbreviated, time: .shortened))")
                         .font(.caption).foregroundStyle(MemoraStyle.muted)
-                    HStack(spacing: 10) {
-                        Button("Abrir original") {
+                    VStack(spacing: 10) {
+                        Button {
                             do {
                                 temporary = try store.temporaryOriginal(for: asset, secure: secure)
                                 showingPreview = true
                             } catch { store.notice = error.localizedDescription }
+                        } label: {
+                            Label("Abrir original", systemImage: "doc.viewfinder")
                         }
                         .buttonStyle(MemoraButtonStyle(prominent: true))
-                        Button("Compartir") {
+                        Button {
                             do {
                                 temporary = try store.temporaryOriginal(for: asset, secure: secure)
                                 showingShare = true
                             } catch { store.notice = error.localizedDescription }
+                        } label: {
+                            Label("Compartir", systemImage: "square.and.arrow.up")
                         }
                         .buttonStyle(MemoraButtonStyle())
                     }
                     if !secure {
-                        HStack(spacing: 10) {
-                            Button(asset.favorite ? "Quitar favorito" : "Favorito") {
+                        VStack(spacing: 10) {
+                            Button {
                                 do { try store.toggleFavorite(asset.id) }
                                 catch { store.notice = error.localizedDescription }
+                            } label: {
+                                Label(asset.favorite ? "Quitar favorito" : "Favorito", systemImage: asset.favorite ? "heart.slash" : "heart")
                             }
                             .buttonStyle(MemoraButtonStyle())
                             Menu("Añadir a álbum") {

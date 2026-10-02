@@ -12,6 +12,10 @@ enum MemoraStyle {
     static func title(_ size: CGFloat = 39) -> Font {
         .system(size: size, weight: .regular, design: .serif)
     }
+
+    static let pagePadding: CGFloat = 20
+    static let panelRadius: CGFloat = 18
+    static let controlHeight: CGFloat = 52
 }
 
 struct MemoraBackground: View {
@@ -30,8 +34,8 @@ struct MemoraHeader: View {
             Text(subtitle).font(.subheadline).foregroundStyle(MemoraStyle.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 13)
-        .padding(.bottom, 16)
+        .padding(.top, 20)
+        .padding(.bottom, 18)
     }
 }
 
@@ -42,10 +46,10 @@ struct Panel<Content: View>: View {
 
     var body: some View {
         content
-            .padding(16)
+            .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 19))
-            .overlay(RoundedRectangle(cornerRadius: 19).stroke(MemoraStyle.border))
+            .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: MemoraStyle.panelRadius))
+            .overlay(RoundedRectangle(cornerRadius: MemoraStyle.panelRadius).stroke(MemoraStyle.border))
     }
 }
 
@@ -90,7 +94,7 @@ struct MemoryRow: View {
         HStack(spacing: 15) {
             Image(systemName: symbol)
                 .font(.system(size: 19, weight: .regular))
-                .frame(width: 42, height: 42)
+                .frame(width: 46, height: 46)
                 .background(MemoraStyle.raised, in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.body)
@@ -101,6 +105,7 @@ struct MemoryRow: View {
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(MemoraStyle.muted)
         }
         .padding(.vertical, 8)
+        .frame(minHeight: MemoraStyle.controlHeight)
         .contentShape(Rectangle())
     }
 }
@@ -140,13 +145,13 @@ struct StatTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             Image(systemName: symbol).font(.title3)
-                .frame(width: 42, height: 42)
+                .frame(width: 46, height: 46)
                 .background(MemoraStyle.raised, in: RoundedRectangle(cornerRadius: 12))
             Text(title).font(.caption).foregroundStyle(MemoraStyle.muted)
             Text(value).font(.title2.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
+        .padding(16)
         .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(MemoraStyle.border))
     }
@@ -159,7 +164,8 @@ struct MemoraButtonStyle: ButtonStyle {
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(prominent ? MemoraStyle.background : .white)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
+            .frame(minHeight: MemoraStyle.controlHeight)
+            .padding(.horizontal, 14)
             .background(prominent ? MemoraStyle.cream : MemoraStyle.raised,
                         in: RoundedRectangle(cornerRadius: 14))
             .opacity(configuration.isPressed ? 0.75 : 1)

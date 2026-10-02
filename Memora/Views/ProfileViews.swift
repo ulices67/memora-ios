@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ProfileView: View {
     @ObservedObject var store: MemoryStore
@@ -21,12 +22,12 @@ struct ProfileView: View {
                     .accessibilityLabel("Abrir configuración")
                 }
                 Panel {
-                    HStack(spacing: 17) {
+                    HStack(spacing: 18) {
                         Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 65, weight: .ultraLight))
+                            .font(.system(size: 76, weight: .ultraLight))
                             .foregroundStyle(MemoraStyle.cream)
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(store.account?.name ?? "").font(MemoraStyle.title(28))
+                            Text(store.account?.name ?? "").font(MemoraStyle.title(31))
                             Text(store.account?.email ?? "").font(.subheadline)
                                 .foregroundStyle(MemoraStyle.muted)
                             if let created = store.account?.createdAt {
@@ -82,65 +83,100 @@ struct SettingsView: View {
                 SectionHeading(title: "Protección de la cuenta")
                 Panel {
                     VStack(spacing: 0) {
-                        MemoryRow(symbol: "checkmark.shield", title: "Cifrado local",
-                                  detail: "AES-256-GCM · Clave individual por archivo", trailing: "Activo")
+                        NavigationLink { SecurityDetailView(store: store) } label: {
+                            MemoryRow(symbol: "checkmark.shield", title: "Cifrado local",
+                                      detail: "AES-256-GCM · Clave individual por archivo", trailing: "Activo")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "faceid", title: "Face ID",
-                                  detail: store.biometricAvailable ? "Disponible para la bóveda" : "No disponible en este dispositivo")
+                        NavigationLink { VaultView(store: store) } label: {
+                            MemoryRow(symbol: "faceid", title: "Face ID",
+                                      detail: store.biometricAvailable ? "Configurar en la bóveda" : "No disponible en este dispositivo")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "lock", title: "Bóveda",
-                                  detail: store.vaultUnlocked ? "Desbloqueada temporalmente" : "Bloqueada")
+                        NavigationLink { VaultView(store: store) } label: {
+                            MemoryRow(symbol: "lock", title: "Bóveda",
+                                      detail: store.vaultUnlocked ? "Desbloqueada temporalmente" : "Bloqueada")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "icloud.slash", title: "Cloudflare Sync",
-                                  detail: "No conectado · No hay copia remota")
+                        NavigationLink { LocalOnlyView() } label: {
+                            MemoryRow(symbol: "icloud.slash", title: "Copias y sincronización",
+                                      detail: "Sólo local · Exportación manual disponible")
+                        }.buttonStyle(.plain)
                     }
                 }
                 SectionHeading(title: "Cuenta")
                 Panel {
                     VStack(spacing: 0) {
-                        MemoryRow(symbol: "person", title: "Información personal", detail: store.account?.name ?? "")
+                        NavigationLink { AccountSettingsView(store: store) } label: {
+                            MemoryRow(symbol: "person", title: "Información personal", detail: store.account?.name ?? "")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "envelope", title: "Email y contraseña", detail: store.account?.email ?? "")
+                        NavigationLink { PasswordSettingsView(store: store) } label: {
+                            MemoryRow(symbol: "envelope", title: "Email y contraseña", detail: store.account?.email ?? "")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "key", title: "Código de recuperación", detail: "Guardado por el usuario; no se puede volver a mostrar")
+                        NavigationLink { RecoveryInfoView() } label: {
+                            MemoryRow(symbol: "key", title: "Código de recuperación", detail: "Cómo protege el acceso a tus claves")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "iphone", title: "Dispositivos y sesiones", detail: "Una cuenta local en este iPhone")
+                        NavigationLink { SessionView(store: store) } label: {
+                            MemoryRow(symbol: "iphone", title: "Dispositivos y sesiones",
+                                      detail: store.persistentSessionEnabled ? "Sesión persistente protegida" : "Solicitar contraseña al abrir")
+                        }.buttonStyle(.plain)
                     }
                 }
                 SectionHeading(title: "Privacidad y reconocimiento")
                 Panel {
                     VStack(spacing: 0) {
-                        MemoryRow(symbol: "person.crop.rectangle", title: "Reconocimiento facial",
-                                  detail: "Pendiente · No se guardan embeddings")
+                        NavigationLink { PrivacyDetailView() } label: {
+                            MemoryRow(symbol: "person.crop.rectangle", title: "Reconocimiento facial",
+                                      detail: "Estado y límites del procesamiento local")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "location", title: "Ubicación y metadatos",
-                                  detail: "Los metadatos de Memora están cifrados")
+                        NavigationLink { MetadataDetailView() } label: {
+                            MemoryRow(symbol: "location", title: "Ubicación y metadatos",
+                                      detail: "Los metadatos de Memora están cifrados")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "eye.slash", title: "Búsqueda mediante foto",
-                                  detail: "Pendiente de modelo local validado")
+                        NavigationLink { PrivacyDetailView() } label: {
+                            MemoryRow(symbol: "eye.slash", title: "Procesamiento local",
+                                      detail: "Tus archivos no salen del dispositivo")
+                        }.buttonStyle(.plain)
                     }
                 }
                 SectionHeading(title: "Biblioteca")
                 Panel {
                     VStack(spacing: 0) {
-                        MemoryRow(symbol: "folder", title: "Secciones", detail: "\(store.library.sections.count) creadas")
+                        NavigationLink { LibraryView(store: store) } label: {
+                            MemoryRow(symbol: "folder", title: "Secciones", detail: "\(store.library.sections.count) creadas")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "rectangle.stack", title: "Álbumes", detail: "\(store.library.albums.count) creados")
+                        NavigationLink { LibraryView(store: store) } label: {
+                            MemoryRow(symbol: "rectangle.stack", title: "Álbumes", detail: "\(store.library.albums.count) creados")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "person.2", title: "Personas", detail: "\(store.library.people.count) perfiles manuales")
+                        NavigationLink { PeopleView(store: store) } label: {
+                            MemoryRow(symbol: "person.2", title: "Personas", detail: "\(store.library.people.count) perfiles manuales")
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "trash", title: "Papelera", detail: "\(store.trash.count) archivos")
+                        NavigationLink { TrashView(store: store) } label: {
+                            MemoryRow(symbol: "trash", title: "Papelera", detail: "\(store.trash.count) archivos")
+                        }.buttonStyle(.plain)
                     }
                 }
                 SectionHeading(title: "Almacenamiento y apariencia")
                 Panel {
                     VStack(spacing: 0) {
-                        MemoryRow(symbol: "externaldrive", title: "Uso local", detail: store.usedBytes.memorySize)
+                        NavigationLink { StorageView(store: store) } label: {
+                            MemoryRow(symbol: "externaldrive", title: "Uso local", detail: store.usedBytes.memorySize)
+                        }.buttonStyle(.plain)
                         Divider()
-                        MemoryRow(symbol: "moon", title: "Tema oscuro", detail: "Activo")
+                        NavigationLink { AppearanceView() } label: {
+                            MemoryRow(symbol: "moon", title: "Apariencia", detail: "Tema oscuro optimizado para OLED")
+                        }.buttonStyle(.plain)
                     }
                 }
-                Text("Memora para iOS · 0.1 · Los archivos permanecen en este dispositivo.")
+                Text("Memora para iOS · 0.4.0 (4) · Los archivos permanecen en este dispositivo.")
                     .font(.caption).foregroundStyle(MemoraStyle.muted).padding(.top, 10)
             }
             .padding(18)
@@ -313,7 +349,7 @@ struct VaultView: View {
                             newRecoveryCode = try store.configureVault(password: password)
                             showRecoverySheet = true
                             password = ""; confirmation = ""; error = nil
-                        } catch let err { self.error = err.localizedDescription }
+                        } catch { error = error.localizedDescription }
                     }
                     .buttonStyle(MemoraButtonStyle(prominent: true))
                 } else if !store.vaultUnlocked {
@@ -328,7 +364,7 @@ struct VaultView: View {
                                 newRecoveryCode = try store.recoverVault(code: recoveryInput, newPassword: password)
                                 showRecoverySheet = true
                                 recoveryInput = ""; password = ""; recoveryMode = false; error = nil
-                            } catch let err { self.error = err.localizedDescription }
+                            } catch { error = error.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle(prominent: true))
                         Button("Volver a desbloquear") { recoveryMode = false; error = nil }
@@ -337,7 +373,7 @@ struct VaultView: View {
                             .textFieldStyle(.roundedBorder)
                         Button("Desbloquear") {
                             do { try store.unlockVault(password: password); password = ""; error = nil }
-                            catch let err { self.error = err.localizedDescription }
+                            catch { error = error.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle(prominent: true))
                         Button("¿Olvidaste la contraseña de la bóveda?") {
@@ -348,7 +384,7 @@ struct VaultView: View {
                     if store.biometricAvailable && !recoveryMode {
                         Button("Usar Face ID") {
                             do { try store.unlockVaultWithBiometrics(); error = nil }
-                            catch let err { self.error = err.localizedDescription }
+                            catch { error = error.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle())
                     }
@@ -366,7 +402,7 @@ struct VaultView: View {
                     if store.biometricAvailable {
                         Button("Activar Face ID para esta bóveda") {
                             do { try store.enableVaultBiometrics(); store.notice = "Face ID activado para la bóveda." }
-                            catch let err { self.error = err.localizedDescription }
+                            catch { error = error.localizedDescription }
                         }
                         .buttonStyle(MemoraButtonStyle())
                     }
@@ -433,5 +469,142 @@ private struct VaultRecoverySheet: View {
         .padding(22)
         .memoraPage()
         .interactiveDismissDisabled()
+    }
+}
+
+private struct AccountSettingsView: View {
+    @ObservedObject var store: MemoryStore
+    @State private var name = ""
+    @State private var message: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                MemoraHeader(title: "Información personal", subtitle: "Tu identidad dentro de Memora")
+                Panel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("Nombre", text: $name)
+                            .textFieldStyle(.roundedBorder)
+                        Text(store.account?.email ?? "")
+                            .font(.caption).foregroundStyle(MemoraStyle.muted)
+                    }
+                }
+                Button("Guardar nombre") {
+                    do { try store.updateProfileName(name); message = "Perfil actualizado." }
+                    catch { message = error.localizedDescription }
+                }
+                .buttonStyle(MemoraButtonStyle(prominent: true))
+                if let message { Text(message).font(.caption).foregroundStyle(MemoraStyle.muted) }
+            }.padding(MemoraStyle.pagePadding)
+        }
+        .onAppear { name = store.account?.name ?? "" }
+        .navigationBarTitleDisplayMode(.inline).memoraPage()
+    }
+}
+
+private struct PasswordSettingsView: View {
+    @ObservedObject var store: MemoryStore
+    @State private var current = ""
+    @State private var next = ""
+    @State private var confirmation = ""
+    @State private var message: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                MemoraHeader(title: "Contraseña", subtitle: "Protege la clave raíz de tu cuenta")
+                SecureField("Contraseña actual", text: $current).textFieldStyle(.roundedBorder)
+                SecureField("Contraseña nueva · mínimo 12 caracteres", text: $next).textFieldStyle(.roundedBorder)
+                SecureField("Confirmar contraseña nueva", text: $confirmation).textFieldStyle(.roundedBorder)
+                Button("Cambiar contraseña") {
+                    do {
+                        guard next == confirmation else { throw MemoraError.invalidInput("Las contraseñas nuevas no coinciden.") }
+                        try store.changePassword(current: current, new: next)
+                        current = ""; next = ""; confirmation = ""; message = "Contraseña actualizada. Tus archivos no necesitaron volver a cifrarse."
+                    } catch { message = error.localizedDescription }
+                }.buttonStyle(MemoraButtonStyle(prominent: true))
+                if let message { Text(message).font(.caption).foregroundStyle(MemoraStyle.muted) }
+            }.padding(MemoraStyle.pagePadding)
+        }.navigationBarTitleDisplayMode(.inline).memoraPage()
+    }
+}
+
+private struct SecurityDetailView: View {
+    @ObservedObject var store: MemoryStore
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                MemoraHeader(title: "Cifrado local", subtitle: "La protección activa de esta biblioteca")
+                Panel { MemoryRow(symbol: "key.horizontal", title: "Clave raíz de cuenta", detail: "Generada en el dispositivo", trailing: "Activa") }
+                Panel { MemoryRow(symbol: "doc.badge.gearshape", title: "Clave individual por archivo", detail: "AES-256-GCM con verificación de integridad", trailing: "Activa") }
+                Panel { MemoryRow(symbol: "number", title: "Detección de duplicados", detail: "Comparación local mediante SHA-256", trailing: "Activa") }
+                Text("La contraseña protege la clave raíz. Cambiarla no vuelve a cifrar todos los originales.").font(.caption).foregroundStyle(MemoraStyle.muted)
+            }.padding(MemoraStyle.pagePadding)
+        }.navigationBarTitleDisplayMode(.inline).memoraPage()
+    }
+}
+
+private struct SessionView: View {
+    @ObservedObject var store: MemoryStore
+    @State private var error: String?
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                MemoraHeader(title: "Sesiones", subtitle: "Accesos autorizados")
+                Panel { MemoryRow(symbol: "iphone", title: UIDevice.current.name, detail: "Sesión local actual", trailing: "Activa") }
+                Panel {
+                    Toggle(isOn: Binding(
+                        get: { store.persistentSessionEnabled },
+                        set: { enabled in
+                            do { try store.setPersistentSession(enabled); error = nil }
+                            catch { error = error.localizedDescription }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Mantener sesión iniciada")
+                            Text("La clave de sesión se guarda en Keychain sólo para este dispositivo.")
+                                .font(.caption).foregroundStyle(MemoraStyle.muted)
+                        }
+                    }
+                }
+                if let error { Text(error).font(.caption).foregroundStyle(.red) }
+                Button("Cerrar esta sesión", role: .destructive) { store.logout() }.buttonStyle(MemoraButtonStyle())
+            }.padding(MemoraStyle.pagePadding)
+        }.navigationBarTitleDisplayMode(.inline).memoraPage()
+    }
+}
+
+private struct RecoveryInfoView: View {
+    var body: some View { InfoPage(title: "Recuperación", symbol: "key", message: "Memora muestra un código nuevo al crear o recuperar la cuenta. Guárdalo fuera de la app: permite volver a envolver la clave raíz sin que un servidor conozca tus archivos.") }
+}
+private struct PrivacyDetailView: View {
+    var body: some View { InfoPage(title: "Procesamiento local", symbol: "iphone.and.arrow.forward", message: "Las personas se organizan manualmente en esta versión. Memora no afirma reconocer rostros ni crea embeddings hasta integrar y validar un modelo ejecutado completamente en el dispositivo.") }
+}
+private struct MetadataDetailView: View {
+    var body: some View { InfoPage(title: "Metadatos", symbol: "location.slash", message: "Nombres, etiquetas, álbumes, personas y ubicaciones guardadas por Memora forman parte del manifiesto cifrado de la biblioteca.") }
+}
+private struct LocalOnlyView: View {
+    var body: some View { InfoPage(title: "Copias", symbol: "icloud.slash", message: "Esta compilación funciona de forma local. No indica que existe una copia remota y no envía originales a Cloudflare ni a otro servicio.") }
+}
+private struct AppearanceView: View {
+    var body: some View { InfoPage(title: "Apariencia", symbol: "moon.stars", message: "Memora usa un tema oscuro de alto contraste, tipografía adaptable y controles de al menos 44 puntos para facilitar el uso en todos los tamaños de iPhone.") }
+}
+
+private struct InfoPage: View {
+    let title: String
+    let symbol: String
+    let message: String
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                MemoraHeader(title: title, subtitle: "Memora 0.4")
+                Panel {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Image(systemName: symbol).font(.system(size: 38)).foregroundStyle(MemoraStyle.cream)
+                        Text(message).foregroundStyle(MemoraStyle.muted)
+                    }.padding(.vertical, 8)
+                }
+            }.padding(MemoraStyle.pagePadding)
+        }.navigationBarTitleDisplayMode(.inline).memoraPage()
     }
 }

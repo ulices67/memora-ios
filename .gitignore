@@ -4,6 +4,10 @@ build/
 *.xcuserstate
 xcuserdata/
 *.ipa
+*.zip
+artifact_device/
+build_cloud/
+extracted_ipa/
 *.mobileprovision
 *.p12
 *.key

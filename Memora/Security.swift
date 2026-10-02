@@ -152,3 +152,44 @@ enum BiometricVault {
         ] as CFDictionary)
     }
 }
+
+enum PersistentSession {
+    private static let service = "app.memora.native.session"
+
+    static func save(_ key: SymmetricKey, account: UUID) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account.uuidString
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        add[kSecValueData as String] = MemoraCrypto.bytes(key)
+        guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else {
+            throw MemoraError.corruptData
+        }
+    }
+
+    static func read(account: UUID) -> SymmetricKey? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account.uuidString,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data, data.count == 32 else { return nil }
+        return SymmetricKey(data: data)
+    }
+
+    static func remove(account: UUID) {
+        SecItemDelete([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account.uuidString
+        ] as CFDictionary)
+    }
+}

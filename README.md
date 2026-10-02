@@ -1,6 +1,6 @@
 # Memora para iPhone
 
-Proyecto **nativo SwiftUI** para abrir en Xcode. La interfaz sigue las referencias entregadas: fondo negro, títulos serif, tarjetas discretas, navegación inferior y pantallas de Perfil, Almacenamiento y Bóveda. Se instala vacía; no contiene fotos, personas, álbumes ni contadores ficticios.
+Proyecto **nativo SwiftUI** para abrir en Xcode. Esta entrega es Memora iOS **0.4.0**, build **4**. La interfaz sigue las referencias entregadas, usa el espacio completo y ofrece rutas funcionales desde Configuración para cuenta, contraseña, cifrado, sesiones, privacidad, biblioteca, almacenamiento, bóveda y apariencia. Se instala vacía; no contiene fotos, personas, álbumes ni contadores ficticios.
 
 ## Abrir y compilar
 
@@ -12,9 +12,14 @@ Proyecto **nativo SwiftUI** para abrir en Xcode. La interfaz sigue las referenci
 
 No requiere CocoaPods, Expo, Node.js, Cloudflare ni servicios externos. Este proyecto se preparó en Windows: se validaron la estructura `.xcodeproj` y la sintaxis Swift, pero **no se pudo ejecutar `xcodebuild`** aquí. La primera compilación y la prueba de Face ID requieren un Mac y un iPhone compatible.
 
+## Vista local
+
+La carpeta `../Memora-iOS-preview` contiene una vista local funcional para abrir en `localhost` desde Windows. Incluye cuenta local, bloqueo por intentos e inactividad, bóveda, importación de inventario, álbumes, personas, búsqueda y configuración persistente. No es una PWA, no instala service worker y no reemplaza la compilación nativa.
+
 ## Funciones presentes
 
 - Registro, inicio de sesión y recuperación **locales**. La contraseña tiene al menos 12 caracteres. Tras cinco intentos fallidos se impone una espera de 30 segundos.
+- Inicio de sesión persistente activado de forma predeterminada. La clave de sesión se guarda en Keychain con acceso limitado a este dispositivo, se verifica al abrir la biblioteca y se elimina al cerrar sesión. Puede desactivarse desde Configuración → Dispositivos y sesiones.
 - Clave raíz aleatoria envuelta con una clave derivada de la contraseña mediante PBKDF2-HMAC-SHA256. El código de recuperación envuelve la misma clave por separado; se muestra una vez y rota al usarlo.
 - Metadatos cifrados; cada original recibe una clave individual AES-256-GCM. Las claves de archivo se envuelven con una clave derivada de la cuenta. Los archivos se guardan con protección de datos de iOS.
 - Importación desde Fotos y Archivos, deduplicación por SHA-256, miniaturas cifradas, álbumes, secciones, personas manuales, favoritos, búsqueda por texto, papelera y restauración. Un asset puede pertenecer a varios álbumes sin duplicar el original.

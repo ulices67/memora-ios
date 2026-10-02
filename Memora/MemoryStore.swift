@@ -14,6 +14,7 @@ final class MemoryStore: ObservableObject {
     @Published var recoveryCode: String?
     @Published var notice: String?
     @Published var busy = false
+    @Published private(set) var persistentSessionEnabled = true
 
     private var rootKey: SymmetricKey?
     private var vaultKey: SymmetricKey?
@@ -22,6 +23,7 @@ final class MemoryStore: ObservableObject {
 
     private let base: URL
     private let fileLimit = 50 * 1024 * 1024
+    private let persistentSessionPreference = "memora.persistent-session.enabled"
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -29,6 +31,21 @@ final class MemoryStore: ObservableObject {
         do {
             try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
             account = try read(AccountRecord.self, from: base.appendingPathComponent("account.json"))
+            if UserDefaults.standard.object(forKey: persistentSessionPreference) != nil {
+                persistentSessionEnabled = UserDefaults.standard.bool(forKey: persistentSessionPreference)
+            }
+            if persistentSessionEnabled, let account,
+               let savedKey = PersistentSession.read(account: account.id) {
+                rootKey = savedKey
+                do {
+                    try loadLibrary()
+                    authenticated = true
+                } catch {
+                    rootKey = nil
+                    PersistentSession.remove(account: account.id)
+                    notice = "La sesión guardada no pudo verificarse. Inicia sesión de nuevo."
+                }
+            }
         } catch {
             notice = "No se pudo abrir el almacenamiento local: \(error.localizedDescription)"
         }
@@ -110,6 +127,7 @@ final class MemoryStore: ObservableObject {
         library = MemoryLibrary()
         try saveLibrary()
         authenticated = true
+        try? persistSessionIfEnabled()
         let code = MemoraCrypto.recoveryString(recovery)
         recoveryCode = code
         return code
@@ -143,6 +161,7 @@ final class MemoryStore: ObservableObject {
         account = record
         try saveAccount()
         authenticated = true
+        try? persistSessionIfEnabled()
     }
 
     func recover(email input: String, code: String, newPassword: String) throws -> String {
@@ -173,18 +192,68 @@ final class MemoryStore: ObservableObject {
         rootKey = SymmetricKey(data: plain)
         try loadLibrary()
         authenticated = true
+        try? persistSessionIfEnabled()
         let code = MemoraCrypto.recoveryString(newRecovery)
         recoveryCode = code
         return code
     }
 
     func logout() {
+        if let account { PersistentSession.remove(account: account.id) }
         lockVault()
         rootKey = nil
         thumbnailCache.removeAll()
         library = MemoryLibrary()
         authenticated = false
         recoveryCode = nil
+    }
+
+    func setPersistentSession(_ enabled: Bool) throws {
+        persistentSessionEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: persistentSessionPreference)
+        if enabled {
+            try persistSessionIfEnabled()
+        } else if let account {
+            PersistentSession.remove(account: account.id)
+        }
+    }
+
+    private func persistSessionIfEnabled() throws {
+        guard persistentSessionEnabled, let account, let rootKey else { return }
+        try PersistentSession.save(rootKey, account: account.id)
+    }
+
+    func updateProfileName(_ name: String) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 2, var record = account else {
+            throw MemoraError.invalidInput("Escribe un nombre válido.")
+        }
+        record.name = trimmed
+        account = record
+        try saveAccount()
+        try? persistSessionIfEnabled()
+    }
+
+    func changePassword(current: String, new: String) throws {
+        guard new.count >= 12, var record = account, let rootKey else {
+            throw MemoraError.invalidInput("La contraseña nueva debe tener al menos 12 caracteres.")
+        }
+        _ = try MemoraCrypto.open(
+            record.wrappedRootKey,
+            key: MemoraCrypto.passwordKey(current, salt: record.passwordSalt),
+            context: "memora:account:\(record.id):password"
+        )
+        let salt = try MemoraCrypto.randomData(16)
+        record.passwordSalt = salt
+        record.wrappedRootKey = try MemoraCrypto.seal(
+            MemoraCrypto.bytes(rootKey),
+            key: MemoraCrypto.passwordKey(new, salt: salt),
+            context: "memora:account:\(record.id):password"
+        )
+        record.failedAttempts = 0
+        record.blockedUntil = nil
+        account = record
+        try saveAccount()
     }
 
     private func metadataKey() throws -> SymmetricKey {

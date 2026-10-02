@@ -11,6 +11,7 @@ struct AuthView: View {
     @State private var recovery = ""
     @State private var error: String?
     @State private var working = false
+    @State private var showingResetConfirmation = false
 
     private enum Mode: String, CaseIterable, Hashable {
         case login = "Iniciar sesión"
@@ -102,6 +103,14 @@ struct AuthView: View {
                         }
                         .font(.caption)
                         .frame(maxWidth: .infinity)
+
+                        Button("¿Problemas para acceder? Restablecer cuenta local") {
+                            showingResetConfirmation = true
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.red.opacity(0.85))
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 2)
                     }
                 }
 
@@ -113,6 +122,26 @@ struct AuthView: View {
             .padding(.horizontal, MemoraStyle.pagePadding)
             .padding(.bottom, 36)
             .frame(maxWidth: .infinity)
+        }
+        .onAppear {
+            if store.account == nil {
+                mode = .register
+            }
+        }
+        .confirmationDialog("¿Restablecer cuenta local?", isPresented: $showingResetConfirmation, titleVisibility: .visible) {
+            Button("Borrar cuenta y empezar de cero", role: .destructive) {
+                store.resetLocalDatabase()
+                mode = .register
+                error = nil
+                name = ""
+                email = ""
+                password = ""
+                confirmation = ""
+                recovery = ""
+            }
+            Button("Cancelar", role: .cancel) {}
+        } message: {
+            Text("Esta acción eliminará la cuenta y los datos guardados en este iPhone para que puedas configurar una cuenta nueva.")
         }
         .memoraPage()
     }
@@ -139,6 +168,9 @@ struct AuthView: View {
                 }
                 _ = try store.register(name: name, email: email, password: password)
             case .recover:
+                guard store.account != nil else {
+                    throw MemoraError.noAccount
+                }
                 _ = try store.recover(email: email, code: recovery, newPassword: password)
             }
             password = ""

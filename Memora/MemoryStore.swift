@@ -304,6 +304,32 @@ final class MemoryStore: ObservableObject {
         recoveryCode = nil
     }
 
+    func resetLocalDatabase() {
+        if let account { PersistentSession.remove(account: account.id) }
+        lockVault()
+        rootKey = nil
+        account = nil
+        library = MemoryLibrary()
+        privateLibrary = nil
+        authenticated = false
+        recoveryCode = nil
+        thumbnailCache.removeAll()
+        notice = nil
+
+        try? FileManager.default.removeItem(at: accountURL)
+        try? FileManager.default.removeItem(at: libraryURL)
+        try? FileManager.default.removeItem(at: vaultURL)
+        try? FileManager.default.removeItem(at: filesURL)
+        try? FileManager.default.removeItem(at: temporaryURL)
+
+        UserDefaults.standard.removeObject(forKey: persistentSessionPreference)
+        UserDefaults.standard.removeObject(forKey: appBiometricsPreference)
+        UserDefaults.standard.removeObject(forKey: lastBackupPreference)
+        persistentSessionEnabled = false
+        appBiometricsEnabled = false
+        lastCloudflareBackupDate = nil
+    }
+
     func setPersistentSession(_ enabled: Bool) throws {
         persistentSessionEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: persistentSessionPreference)

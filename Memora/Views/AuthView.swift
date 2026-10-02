@@ -11,7 +11,7 @@ struct AuthView: View {
     @State private var recovery = ""
     @State private var error: String?
     @State private var working = false
-    @State private var showingResetConfirmation = false
+    @State private var showWipeWarning = false
 
     private enum Mode: String, CaseIterable, Hashable {
         case login = "Iniciar sesión"
@@ -103,47 +103,39 @@ struct AuthView: View {
                         }
                         .font(.caption)
                         .frame(maxWidth: .infinity)
-
-                        Button("¿Problemas para acceder? Restablecer cuenta local") {
-                            showingResetConfirmation = true
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.red.opacity(0.85))
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 2)
                     }
                 }
 
                 Text("Cuenta local en este iPhone. Al entrar, la sesión puede mantenerse mediante Keychain; puedes revocarla desde Perfil → Configuración → Dispositivos y sesiones.")
                     .font(.caption)
                     .foregroundStyle(MemoraStyle.muted)
+                
+                if store.hasAccount {
+                    Button(role: .destructive) {
+                        showWipeWarning = true
+                    } label: {
+                        Text("Restablecer cuenta local (Borrar todos los datos)")
+                            .font(.caption)
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 10)
+                    }
+                }
             }
             .frame(maxWidth: 440)
             .padding(.horizontal, MemoraStyle.pagePadding)
             .padding(.bottom, 36)
             .frame(maxWidth: .infinity)
         }
-        .onAppear {
-            if store.account == nil {
-                mode = .register
-            }
-        }
-        .confirmationDialog("¿Restablecer cuenta local?", isPresented: $showingResetConfirmation, titleVisibility: .visible) {
-            Button("Borrar cuenta y empezar de cero", role: .destructive) {
-                store.resetLocalDatabase()
-                mode = .register
-                error = nil
-                name = ""
-                email = ""
-                password = ""
-                confirmation = ""
-                recovery = ""
-            }
-            Button("Cancelar", role: .cancel) {}
-        } message: {
-            Text("Esta acción eliminará la cuenta y los datos guardados en este iPhone para que puedas configurar una cuenta nueva.")
-        }
         .memoraPage()
+        .alert("¿Borrar cuenta local?", isPresented: $showWipeWarning) {
+            Button("Cancelar", role: .cancel) { }
+            Button("Borrar todo", role: .destructive) {
+                store.wipeLocalData()
+                mode = .register
+            }
+        } message: {
+            Text("Esto eliminará la base de datos de Memora de este iPhone. Es irreversible.")
+        }
     }
 
     private func input(_ placeholder: String, text: Binding<String>, keyboard: UIKeyboardType = .default) -> some View {
@@ -168,9 +160,6 @@ struct AuthView: View {
                 }
                 _ = try store.register(name: name, email: email, password: password)
             case .recover:
-                guard store.account != nil else {
-                    throw MemoraError.noAccount
-                }
                 _ = try store.recover(email: email, code: recovery, newPassword: password)
             }
             password = ""

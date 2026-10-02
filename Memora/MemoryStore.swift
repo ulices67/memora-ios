@@ -304,30 +304,28 @@ final class MemoryStore: ObservableObject {
         recoveryCode = nil
     }
 
-    func resetLocalDatabase() {
-        if let account { PersistentSession.remove(account: account.id) }
-        lockVault()
-        rootKey = nil
+    func wipeLocalData() {
+        do {
+            if FileManager.default.fileExists(atPath: base.path) {
+                try FileManager.default.removeItem(at: base)
+            }
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        } catch {
+            print("Error wiping data: \(error)")
+        }
+        
+        if let account {
+            PersistentSession.remove(account: account.id)
+        }
         account = nil
+        authenticated = false
         library = MemoryLibrary()
         privateLibrary = nil
-        authenticated = false
+        rootKey = nil
+        vaultKey = nil
+        appLocked = false
         recoveryCode = nil
-        thumbnailCache.removeAll()
-        notice = nil
-
-        try? FileManager.default.removeItem(at: accountURL)
-        try? FileManager.default.removeItem(at: libraryURL)
-        try? FileManager.default.removeItem(at: vaultURL)
-        try? FileManager.default.removeItem(at: filesURL)
-        try? FileManager.default.removeItem(at: temporaryURL)
-
-        UserDefaults.standard.removeObject(forKey: persistentSessionPreference)
-        UserDefaults.standard.removeObject(forKey: appBiometricsPreference)
-        UserDefaults.standard.removeObject(forKey: lastBackupPreference)
-        persistentSessionEnabled = false
-        appBiometricsEnabled = false
-        lastCloudflareBackupDate = nil
+        notice = "Los datos locales han sido borrados. Puedes crear una nueva cuenta."
     }
 
     func setPersistentSession(_ enabled: Bool) throws {

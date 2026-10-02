@@ -205,7 +205,7 @@ struct SettingsView: View {
                         }.buttonStyle(.plain)
                     }
                 }
-                Text("Memora para iOS · 0.6.1 (9) · Los archivos permanecen en este dispositivo.")
+                Text("Memora para iOS · 0.6.0 (8) · Los archivos permanecen en este dispositivo.")
                     .font(.caption).foregroundStyle(MemoraStyle.muted).padding(.top, 10)
             }
             .padding(MemoraStyle.pagePadding)

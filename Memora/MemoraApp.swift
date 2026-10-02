@@ -94,13 +94,6 @@ struct AppBiometricLockView: View {
                 .font(.subheadline)
                 .foregroundStyle(MemoraStyle.muted)
                 .padding(.top, 4)
-
-                Button("Cerrar sesión / Cambiar cuenta") {
-                    store.logout()
-                }
-                .font(.caption)
-                .foregroundStyle(MemoraStyle.muted)
-                .padding(.top, 2)
             }
             .padding(.horizontal, MemoraStyle.pagePadding)
             .padding(.bottom, 32)

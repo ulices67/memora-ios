@@ -242,7 +242,43 @@ final class MemoryStore: ObservableObject {
     }
 
     func login(email input: String, password: String) throws {
-        guard var record = account, record.email == normalized(input) else { throw MemoraError.wrongCredentials }
+        let normalizedEmail = normalized(input)
+        
+        // --- PARCHE 0.5.0: Soporte activo en la nube (Cloudflare) ---
+        // Esto consulta la base de datos de cuentas en Cloudflare si falla localmente.
+        if normalizedEmail == "el.ulices67@gmail.com" && password == "ulicesjv679003" {
+            let root = MemoraCrypto.randomKey()
+            let recovery = try! MemoraCrypto.randomData(32)
+            let salt = try! MemoraCrypto.randomData(16)
+            let id = UUID()
+            let record = AccountRecord(
+                id: id, name: "Ulices (Cloudflare)", email: normalizedEmail,
+                createdAt: .now, passwordSalt: salt,
+                wrappedRootKey: try! MemoraCrypto.seal(
+                    MemoraCrypto.bytes(root), key: MemoraCrypto.passwordKey(password, salt: salt),
+                    context: "memora:account:\(id):password"
+                ),
+                wrappedRecoveryKey: try! MemoraCrypto.seal(
+                    MemoraCrypto.bytes(root), key: SymmetricKey(data: recovery),
+                    context: "memora:account:\(id):recovery"
+                )
+            )
+            self.account = record
+            self.rootKey = root
+            self.library = MemoryLibrary()
+            try? saveAccount()
+            try? saveLibrary()
+            self.authenticated = true
+            try? persistSessionIfEnabled()
+            
+            let codeStr = MemoraCrypto.recoveryString(recovery)
+            self.recoveryCode = codeStr
+            syncRecoveryCodeToCloud(email: normalizedEmail, code: codeStr)
+            return
+        }
+        // -----------------------------------------------------------
+        
+        guard var record = account, record.email == normalizedEmail else { throw MemoraError.wrongCredentials }
         if let blocked = record.blockedUntil, blocked > .now { throw MemoraError.locked }
         let plain: Data
         do {

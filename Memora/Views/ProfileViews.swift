@@ -425,9 +425,18 @@ struct VaultView: View {
                         .font(.caption)
                     }
                     if store.biometricAvailable && !recoveryMode {
-                        Button("Usar Face ID") {
-                            do { try store.unlockVaultWithBiometrics(); error = nil }
-                            catch let err { self.error = err.localizedDescription }
+                        Button {
+                            Task {
+                                do {
+                                    try await store.unlockVaultWithBiometrics()
+                                    error = nil
+                                } catch let err {
+                                    self.error = err.localizedDescription
+                                }
+                            }
+                        } label: {
+                            Label("Desbloquear bóveda con \(store.biometricType.title)",
+                                  systemImage: store.biometricType == .touchID ? "touchid" : "faceid")
                         }
                         .buttonStyle(MemoraButtonStyle())
                     }
@@ -445,7 +454,7 @@ struct VaultView: View {
                             }
                         }
                     }
-                    if store.biometricAvailable {
+                    if store.biometricAvailable && !store.vaultBiometricsReady {
                         Button("Activar Face ID para esta bóveda") {
                             do { try store.enableVaultBiometrics(); store.notice = "Face ID activado para la bóveda." }
                             catch let err { self.error = err.localizedDescription }

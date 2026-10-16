@@ -29,12 +29,15 @@ struct MainTabs: View {
 struct ImportActions: View {
     @ObservedObject var store: MemoryStore
     var secure = false
+    var targetAlbumID: UUID? = nil
+    var targetSectionID: UUID? = nil
+    var targetPersonID: UUID? = nil
     @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var showingFiles = false
 
     var body: some View {
         HStack(spacing: 8) {
-            PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 20,
+            PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 400,
                          matching: .any(of: [.images, .videos])) {
                 Label("Fotos y videos", systemImage: "photo.on.rectangle")
                     .lineLimit(1)
@@ -53,16 +56,79 @@ struct ImportActions: View {
         .frame(maxWidth: .infinity)
         .onChange(of: selectedPhotos) { _, items in
             guard !items.isEmpty else { return }
+            let picked = items
+            selectedPhotos = []
             Task {
-                await store.importPhotoItems(items, secure: secure)
-                selectedPhotos = []
+                await store.importPhotoItems(
+                    picked,
+                    secure: secure,
+                    targetAlbumID: targetAlbumID,
+                    targetSectionID: targetSectionID,
+                    targetPersonID: targetPersonID
+                )
             }
         }
         .fileImporter(isPresented: $showingFiles, allowedContentTypes: [.item],
                       allowsMultipleSelection: true) { result in
             switch result {
-            case .success(let urls): store.importURLs(urls, secure: secure)
-            case .failure(let error): store.notice = error.localizedDescription
+            case .success(let urls):
+                store.importURLs(
+                    urls,
+                    secure: secure,
+                    targetAlbumID: targetAlbumID,
+                    targetSectionID: targetSectionID,
+                    targetPersonID: targetPersonID
+                )
+            case .failure(let error):
+                store.notice = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct SmartAlbumAutomationBanner: View {
+    @ObservedObject var store: MemoryStore
+
+    private var unalbumedCount: Int {
+        store.unalbumedPhotoAssets.count
+    }
+
+    var body: some View {
+        if !store.library.albums.isEmpty && unalbumedCount > 0 {
+            Panel {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "sparkles.rectangle.stack.fill")
+                            .font(.title3)
+                            .foregroundStyle(MemoraStyle.cream)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Automatización inteligente de álbumes")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text("\(unalbumedCount) foto\(unalbumedCount == 1 ? "" : "s") sin álbum · Se integran solas al reconocer caras de tus álbumes")
+                                .font(.caption)
+                                .foregroundStyle(MemoraStyle.muted)
+                        }
+                        Spacer()
+                    }
+
+                    Button {
+                        Task {
+                            await store.autoOrganizeUnalbumedAssetsByFaces()
+                        }
+                    } label: {
+                        if store.busy {
+                            HStack(spacing: 8) {
+                                ProgressView().tint(MemoraStyle.background)
+                                Text("Reconociendo e integrando...")
+                            }
+                        } else {
+                            Label("Auto-integrar fotos sin álbum por rostros", systemImage: "wand.and.stars")
+                        }
+                    }
+                    .buttonStyle(MemoraButtonStyle(prominent: true))
+                    .disabled(store.busy)
+                }
             }
         }
     }
@@ -86,6 +152,8 @@ struct HomeView: View {
                     StatTile(symbol: "person.2", title: "Personas", value: "\(store.library.people.count)")
                 }
                 ImportActions(store: store)
+
+                SmartAlbumAutomationBanner(store: store)
 
                 SectionHeading(title: "Álbumes recientes")
                 if store.library.albums.isEmpty {
@@ -148,6 +216,7 @@ struct LibraryView: View {
                     }
                 }
                 ImportActions(store: store)
+                SmartAlbumAutomationBanner(store: store)
                 HStack {
                     SectionHeading(title: "Álbumes")
                     Button { addingAlbum = true } label: { Image(systemName: "plus.circle") }
@@ -368,17 +437,32 @@ struct AlbumDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                MemoraHeader(title: album.name, subtitle: "\(assets.count) elementos · Arrastra fotos aquí")
+                MemoraHeader(title: album.name, subtitle: "\(assets.count) elementos · Se integran directo a este álbum")
 
-                HStack(spacing: 8) {
-                    Button {
-                        showingAddPhotos = true
-                    } label: {
-                        Label("Añadir de la biblioteca", systemImage: "plus.rectangle.on.rectangle")
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button {
+                            showingAddPhotos = true
+                        } label: {
+                            Label("Añadir de la biblioteca", systemImage: "plus.rectangle.on.rectangle")
+                        }
+                        .buttonStyle(MemoraButtonStyle(prominent: true))
+
+                        ImportActions(store: store, secure: secure, targetAlbumID: album.id)
                     }
-                    .buttonStyle(MemoraButtonStyle(prominent: true))
 
-                    ImportActions(store: store, secure: secure)
+                    if !secure && !store.unalbumedPhotoAssets.isEmpty && !assets.isEmpty {
+                        Button {
+                            let count = store.autoOrganizeUnalbumedAssetsByFaces(targetAlbumID: album.id)
+                            if count == 0 {
+                                store.notice = "No se encontraron fotos sin álbum con rostros que coincidan con '\(album.name)'."
+                            }
+                        } label: {
+                            Label("Auto-integrar fotos sin álbum por rostros (\(store.unalbumedPhotoAssets.count) pendientes)", systemImage: "wand.and.stars")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(MemoraButtonStyle())
+                    }
                 }
 
                 if isDropTargeted {
@@ -390,7 +474,7 @@ struct AlbumDetailView: View {
 
                 if assets.isEmpty {
                     EmptyMemory(symbol: "photo.stack", title: "Álbum vacío",
-                                message: "Arrastra archivos aquí o toca 'Añadir de la biblioteca' para organizarlos.")
+                                message: "Toca 'Fotos' o 'Archivos' arriba para importar hasta 400 elementos directamente a este álbum.")
                 } else {
                     AssetGrid(store: store, assets: assets, secure: secure)
                 }
@@ -427,8 +511,22 @@ struct AddToAlbumSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Selecciona recuerdos para añadir a '\(album.name)'")
-                        .font(.subheadline).foregroundStyle(MemoraStyle.muted)
+                    HStack {
+                        Text("Selecciona hasta 400 recuerdos para '\(album.name)'")
+                            .font(.subheadline).foregroundStyle(MemoraStyle.muted)
+                        Spacer()
+                        if !available.isEmpty {
+                            Button(selectedIDs.isEmpty ? "Seleccionar \(min(available.count, 400))" : "Deseleccionar") {
+                                if selectedIDs.isEmpty {
+                                    selectedIDs = Set(available.prefix(400).map(\.id))
+                                } else {
+                                    selectedIDs.removeAll()
+                                }
+                            }
+                            .font(.caption.bold())
+                            .foregroundStyle(MemoraStyle.cream)
+                        }
+                    }
 
                     if available.isEmpty {
                         EmptyMemory(symbol: "checkmark.circle", title: "Todo asignado",
@@ -449,8 +547,10 @@ struct AddToAlbumSheet: View {
                                 .onTapGesture {
                                     if selectedIDs.contains(asset.id) {
                                         selectedIDs.remove(asset.id)
-                                    } else {
+                                    } else if selectedIDs.count < 400 {
                                         selectedIDs.insert(asset.id)
+                                    } else {
+                                        store.notice = "Límite máximo de 400 elementos por selección alcanzado."
                                     }
                                 }
                             }
@@ -625,19 +725,23 @@ struct SectionDetailView: View {
             VStack(alignment: .leading, spacing: 18) {
                 MemoraHeader(
                     title: section.name,
-                    subtitle: "\(albums.count) álbumes · \(assets.count) recuerdos asociados · Arrastra álbumes o fotos aquí"
+                    subtitle: "\(albums.count) álbumes · \(assets.count) recuerdos asociados · Integración directa activa"
                 )
 
-                HStack(spacing: 8) {
-                    Button { addingAlbum = true } label: {
-                        Label("Nuevo álbum", systemImage: "plus.rectangle.on.rectangle")
-                    }
-                    .buttonStyle(MemoraButtonStyle(prominent: true))
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button { addingAlbum = true } label: {
+                            Label("Nuevo álbum", systemImage: "plus.rectangle.on.rectangle")
+                        }
+                        .buttonStyle(MemoraButtonStyle(prominent: true))
 
-                    Button { showingAddFiles = true } label: {
-                        Label("Añadir archivos", systemImage: "photo.badge.plus")
+                        Button { showingAddFiles = true } label: {
+                            Label("De biblioteca", systemImage: "photo.badge.plus")
+                        }
+                        .buttonStyle(MemoraButtonStyle())
                     }
-                    .buttonStyle(MemoraButtonStyle())
+
+                    ImportActions(store: store, targetSectionID: section.id)
                 }
 
                 if isDropTargeted {
@@ -672,7 +776,7 @@ struct SectionDetailView: View {
                     EmptyMemory(
                         symbol: "photo.stack",
                         title: "No hay archivos asignados",
-                        message: "Arrastra fotos aquí para asociarlas a esta sección."
+                        message: "Importa fotos arriba o arrástralas aquí para integrarlas directamente a esta sección."
                     )
                 } else {
                     AssetGrid(store: store, assets: assets)
@@ -727,8 +831,22 @@ struct AddToSectionSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("Selecciona recuerdos para incorporar a la sección '\(section.name)'")
-                        .font(.subheadline).foregroundStyle(MemoraStyle.muted)
+                    HStack {
+                        Text("Selecciona hasta 400 recuerdos para '\(section.name)'")
+                            .font(.subheadline).foregroundStyle(MemoraStyle.muted)
+                        Spacer()
+                        if !available.isEmpty {
+                            Button(selectedIDs.isEmpty ? "Seleccionar \(min(available.count, 400))" : "Deseleccionar") {
+                                if selectedIDs.isEmpty {
+                                    selectedIDs = Set(available.prefix(400).map(\.id))
+                                } else {
+                                    selectedIDs.removeAll()
+                                }
+                            }
+                            .font(.caption.bold())
+                            .foregroundStyle(MemoraStyle.cream)
+                        }
+                    }
 
                     if available.isEmpty {
                         EmptyMemory(symbol: "checkmark.circle", title: "Todo asignado",
@@ -749,8 +867,10 @@ struct AddToSectionSheet: View {
                                 .onTapGesture {
                                     if selectedIDs.contains(asset.id) {
                                         selectedIDs.remove(asset.id)
-                                    } else {
+                                    } else if selectedIDs.count < 400 {
                                         selectedIDs.insert(asset.id)
+                                    } else {
+                                        store.notice = "Límite máximo de 400 elementos por selección alcanzado."
                                     }
                                 }
                             }
@@ -1058,162 +1178,80 @@ struct PeopleView: View {
     @State private var selectedTab = 0
     @State private var namingCluster: FaceCluster?
     @State private var clusterPersonName = ""
+    @State private var isRunningAutoKnowledge = false
+    @State private var isSelectingFaces = false
+    @State private var selectedFaceIDs: Set<UUID> = []
+    @State private var showingBatchNewPerson = false
+    @State private var batchNewPersonName = ""
 
-    private var reviewCount: Int {
-        store.library.detectedFaces.filter { $0.reviewStatus == .suggested }.count
+    private var unassignedFaces: [DetectedFace] {
+        store.activeUnassignedFaces
+    }
+
+    private var suggestedFaces: [DetectedFace] {
+        store.activeSuggestedFaces
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                MemoraHeader(title: "Personas", subtitle: "Reconocimiento facial y agrupaciones locales")
+                MemoraHeader(title: "Personas", subtitle: "Face Engine v2.5 · Autoconocimiento y revisión masiva")
 
-                HStack(spacing: 10) {
-                    Button { adding = true } label: { Label("Nueva persona", systemImage: "plus") }
+                // Barra de acciones rápidas y autoconocimiento
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button { adding = true } label: {
+                            Label("Nueva persona", systemImage: "person.badge.plus")
+                        }
                         .buttonStyle(MemoraButtonStyle(prominent: true))
 
-                    Button {
-                        store.recomputeClusters()
-                    } label: {
-                        Label("Reanalizar", systemImage: "arrow.triangle.2.circlepath")
+                        Button {
+                            guard !isRunningAutoKnowledge else { return }
+                            isRunningAutoKnowledge = true
+                            Task {
+                                await store.runFullFaceAutoKnowledge()
+                                isRunningAutoKnowledge = false
+                            }
+                        } label: {
+                            if isRunningAutoKnowledge {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small).tint(.white)
+                                    Text("Aprendiendo…")
+                                }
+                            } else {
+                                Label("Autoconocimiento", systemImage: "brain.head.profile")
+                            }
+                        }
+                        .buttonStyle(MemoraButtonStyle())
                     }
-                    .buttonStyle(MemoraButtonStyle())
+
+                    if !store.unalbumedPhotoAssets.isEmpty && !store.library.albums.isEmpty {
+                        Button {
+                            let count = store.autoOrganizeUnalbumedAssetsByFaces()
+                            if count == 0 {
+                                store.notice = "Aún no hay coincidencias faciales suficientes con tus álbumes."
+                            }
+                        } label: {
+                            Label("Auto-integrar \(store.unalbumedPhotoAssets.count) fotos sin álbum por caras", systemImage: "wand.and.stars")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(MemoraButtonStyle())
+                    }
                 }
 
                 Picker("Categoría", selection: $selectedTab) {
-                    Text("Todas (\(store.library.people.count))").tag(0)
-                    Text("Sin identificar (\(store.library.clusters.count))").tag(1)
-                    Text("Revisar (\(reviewCount))").tag(2)
+                    Text("Personas (\(store.library.people.count))").tag(0)
+                    Text("Sin identificar (\(unassignedFaces.count))").tag(1)
+                    Text("Revisar (\(suggestedFaces.count))").tag(2)
                 }
                 .pickerStyle(.segmented)
 
                 if selectedTab == 0 {
-                    if store.library.people.isEmpty {
-                        EmptyMemory(symbol: "person.2", title: "Ponle nombre a tus recuerdos",
-                                    message: "Crea personas o asígnales nombre desde las agrupaciones automáticas de rostros.")
-                    }
-                    ForEach(store.library.people) { person in
-                        NavigationLink {
-                            PersonDetailView(store: store, person: person)
-                        } label: {
-                            Panel {
-                                HStack(spacing: 14) {
-                                    Image(systemName: "person.crop.circle")
-                                        .font(.system(size: 38, weight: .ultraLight))
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(person.name)
-                                            .font(MemoraStyle.title(22))
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.85)
-                                        Text("\(store.activeAssets.filter { $0.personIDs.contains(person.id) }.count) archivos")
-                                            .font(.caption).foregroundStyle(MemoraStyle.muted)
-                                    }
-                                    Spacer()
-                                    if !person.reviewCandidateAssetIDs.isEmpty {
-                                        Text("\(person.reviewCandidateAssetIDs.count) para revisar")
-                                            .font(.caption2.bold())
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(Color.orange.opacity(0.2), in: Capsule())
-                                            .foregroundStyle(.orange)
-                                    }
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundStyle(MemoraStyle.muted)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    peopleListSection
                 } else if selectedTab == 1 {
-                    if store.library.clusters.isEmpty {
-                        EmptyMemory(symbol: "person.crop.circle.badge.checkmark",
-                                    title: "No hay rostros sin identificar",
-                                    message: "Todos los rostros detectados han sido nombrados o no cumplen el Quality Gate.")
-                    } else {
-                        ForEach(store.library.clusters) { cluster in
-                            Panel {
-                                HStack(spacing: 14) {
-                                    Image(systemName: "person.crop.rectangle.stack")
-                                        .font(.system(size: 32, weight: .ultraLight))
-                                        .foregroundStyle(MemoraStyle.cream)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Grupo con \(cluster.faceIDs.count) fotos")
-                                            .font(MemoraStyle.title(18))
-                                        Text("Rostros similares encontrados localmente")
-                                            .font(.caption).foregroundStyle(MemoraStyle.muted)
-                                    }
-                                    Spacer()
-                                    Button("Nombrar") {
-                                        clusterPersonName = cluster.suggestedName ?? ""
-                                        namingCluster = cluster
-                                    }
-                                    .buttonStyle(MemoraButtonStyle(prominent: true))
-                                }
-                            }
-                        }
-                    }
+                    unidentifiedMassSection
                 } else {
-                    let suggested = store.library.detectedFaces.filter { $0.reviewStatus == .suggested }
-                    if suggested.isEmpty {
-                        EmptyMemory(symbol: "checkmark.circle",
-                                    title: "Todo al día",
-                                    message: "No hay coincidencias en zona de duda pendientes de confirmación.")
-                    } else {
-                        ForEach(suggested) { face in
-                            Panel {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    HStack {
-                                        if let asset = store.library.assets.first(where: { $0.id == face.assetID }),
-                                           let thumb = store.thumbnail(for: asset) {
-                                            Image(uiImage: thumb)
-                                                .resizable()
-                                                .scaledToFill()
-                                                .frame(width: 50, height: 50)
-                                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                                        }
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            if let pID = face.personID, let person = store.library.people.first(where: { $0.id == pID }) {
-                                                Text("¿Es \(person.name)?")
-                                                    .font(MemoraStyle.title(18))
-                                            } else {
-                                                Text("Coincidencia sugerida")
-                                                    .font(MemoraStyle.title(18))
-                                            }
-                                            Text(String(format: "Confianza: %.0f%% · Zona de revisión", face.confidence * 100))
-                                                .font(.caption)
-                                                .foregroundStyle(.orange)
-                                        }
-                                        Spacer()
-                                    }
-                                    HStack(spacing: 10) {
-                                        if let pID = face.personID {
-                                            Button("Confirmar") {
-                                                do {
-                                                    try store.confirmFaceReview(faceID: face.id, personID: pID)
-                                                } catch {
-                                                    store.notice = error.localizedDescription
-                                                }
-                                            }
-                                            .buttonStyle(MemoraButtonStyle(prominent: true))
-                                        }
-                                        Menu("Asignar a otra") {
-                                            ForEach(store.library.people) { other in
-                                                Button(other.name) {
-                                                    do {
-                                                        try store.correctFace(faceID: face.id, correctPersonID: other.id)
-                                                    } catch {
-                                                        store.notice = error.localizedDescription
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        .buttonStyle(MemoraButtonStyle())
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    fastReviewSection
                 }
             }
             .padding(MemoraStyle.pagePadding)
@@ -1231,7 +1269,7 @@ struct PeopleView: View {
             set: { if !$0 { namingCluster = nil } }
         )) {
             TextField("Nombre de la persona", text: $clusterPersonName)
-            Button("Guardar") {
+            Button("Guardar y propagar") {
                 if let cluster = namingCluster {
                     do {
                         try store.nameCluster(cluster.id, name: clusterPersonName)
@@ -1247,8 +1285,476 @@ struct PeopleView: View {
                 clusterPersonName = ""
             }
         }
+        .alert("Asignar \(selectedFaceIDs.count) rostro(s) a nueva persona", isPresented: $showingBatchNewPerson) {
+            TextField("Nombre de la persona", text: $batchNewPersonName)
+            Button("Crear y aprender") {
+                do {
+                    try store.batchAssignFaces(Array(selectedFaceIDs), toPersonID: nil, newPersonName: batchNewPersonName)
+                    selectedFaceIDs.removeAll()
+                    isSelectingFaces = false
+                } catch {
+                    store.notice = error.localizedDescription
+                }
+                batchNewPersonName = ""
+            }
+            Button("Cancelar", role: .cancel) {
+                batchNewPersonName = ""
+            }
+        }
         .toolbar(.hidden, for: .navigationBar)
         .memoraPage()
+    }
+
+    // MARK: - Tab 0: Lista de Personas con Avatar Recortado y Confirmación Rápida
+    @ViewBuilder
+    private var peopleListSection: some View {
+        Panel {
+            Toggle(isOn: $store.autoAlbumByFaceEnabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Auto-integrar fotos sin álbum por rostros")
+                        .font(.subheadline.bold())
+                    Text("Si una foto nueva o sin álbum contiene una cara reconocida en un álbum, se integra automáticamente.")
+                        .font(.caption2)
+                        .foregroundStyle(MemoraStyle.muted)
+                }
+            }
+        }
+
+        if store.library.people.isEmpty {
+            EmptyMemory(symbol: "person.2", title: "Ponle nombre a tus recuerdos",
+                        message: "Entra a 'Sin identificar' para nombrar grupos enteros en 1 toque o pulsa 'Autoconocimiento'.")
+        }
+
+        ForEach(store.library.people) { person in
+            let personAssetsCount = store.activeAssets.filter { $0.personIDs.contains(person.id) }.count
+            let personSuggestedCount = suggestedFaces.filter { $0.personID == person.id }.count
+            let avatarFace = store.activeDetectedFaces.first { $0.personID == person.id && $0.reviewStatus == .confirmed }
+                ?? store.activeDetectedFaces.first { $0.personID == person.id }
+
+            NavigationLink {
+                PersonDetailView(store: store, person: person)
+            } label: {
+                Panel {
+                    HStack(spacing: 14) {
+                        if let avatarFace, let crop = store.faceCropImage(for: avatarFace) {
+                            Image(uiImage: crop)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 52, height: 52)
+                                .clipShape(Circle())
+                                .overlay(Circle().stroke(MemoraStyle.cream.opacity(0.4), lineWidth: 1))
+                        } else {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.system(size: 44, weight: .light))
+                                .foregroundStyle(MemoraStyle.cream)
+                                .frame(width: 52, height: 52)
+                        }
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(person.name)
+                                .font(MemoraStyle.title(21))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                            Text("\(personAssetsCount) recuerdos · \(store.albumsForPerson(personID: person.id).count) álbumes")
+                                .font(.caption)
+                                .foregroundStyle(MemoraStyle.muted)
+                        }
+                        Spacer()
+
+                        if personSuggestedCount > 0 {
+                            Button {
+                                try? store.confirmAllSuggestedFaces(forPersonID: person.id)
+                            } label: {
+                                Text("Confirmar \(personSuggestedCount)")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(Color.orange.opacity(0.25), in: Capsule())
+                                    .foregroundStyle(.orange)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(MemoraStyle.muted)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                if personSuggestedCount > 0 {
+                    Button {
+                        try? store.confirmAllSuggestedFaces(forPersonID: person.id)
+                    } label: {
+                        Label("Confirmar \(personSuggestedCount) sugerencias", systemImage: "checkmark.circle")
+                    }
+                }
+                Button(role: .destructive) {
+                    try? store.deletePerson(person.id)
+                } label: {
+                    Label("Eliminar persona", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    // MARK: - Tab 1: Sin Identificar (Modificación Masiva + Grupos + Cuadrícula de Caras)
+    @ViewBuilder
+    private var unidentifiedMassSection: some View {
+        if unassignedFaces.isEmpty && store.library.clusters.isEmpty {
+            EmptyMemory(symbol: "person.crop.circle.badge.checkmark",
+                        title: "No hay rostros sin identificar",
+                        message: "Todos los rostros válidos han sido identificados. Pulsa 'Autoconocimiento' para escanear fotos nuevas.")
+        } else {
+            // Barra de selección masiva
+            Panel {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(isSelectingFaces ? "\(selectedFaceIDs.count) rostro(s) seleccionado(s)" : "Edición masiva rápida")
+                                .font(.subheadline.bold())
+                            Text("Selecciona varios rostros o asigna grupos enteros en un toque con propagación automática.")
+                                .font(.caption2)
+                                .foregroundStyle(MemoraStyle.muted)
+                        }
+                        Spacer()
+                        Button(isSelectingFaces ? "Listo" : "Seleccionar") {
+                            isSelectingFaces.toggle()
+                            if !isSelectingFaces {
+                                selectedFaceIDs.removeAll()
+                            }
+                        }
+                        .buttonStyle(MemoraButtonStyle(prominent: isSelectingFaces))
+                    }
+
+                    if isSelectingFaces {
+                        HStack(spacing: 8) {
+                            Button(selectedFaceIDs.count == min(unassignedFaces.count, 400) ? "Deseleccionar" : "Todo (\(min(unassignedFaces.count, 400)))") {
+                                if selectedFaceIDs.count == min(unassignedFaces.count, 400) {
+                                    selectedFaceIDs.removeAll()
+                                } else {
+                                    selectedFaceIDs = Set(unassignedFaces.prefix(400).map(\.id))
+                                }
+                            }
+                            .font(.caption.bold())
+                            .foregroundStyle(MemoraStyle.cream)
+
+                            if let firstID = selectedFaceIDs.first {
+                                Button("Seleccionar similares") {
+                                    let similar = store.similarUnassignedFaces(to: firstID)
+                                    for id in similar where selectedFaceIDs.count < 400 {
+                                        selectedFaceIDs.insert(id)
+                                    }
+                                    store.notice = "\(similar.count) rostros similares seleccionados automáticamente."
+                                }
+                                .font(.caption.bold())
+                                .foregroundStyle(.mint)
+                            }
+
+                            Spacer()
+                        }
+
+                        if !selectedFaceIDs.isEmpty {
+                            Divider()
+                            HStack(spacing: 8) {
+                                Button {
+                                    batchNewPersonName = ""
+                                    showingBatchNewPerson = true
+                                } label: {
+                                    Label("Nueva persona", systemImage: "person.badge.plus")
+                                }
+                                .buttonStyle(MemoraButtonStyle(prominent: true))
+
+                                if !store.library.people.isEmpty {
+                                    Menu {
+                                        ForEach(store.library.people) { person in
+                                            Button("Es \(person.name)") {
+                                                try? store.batchAssignFaces(Array(selectedFaceIDs), toPersonID: person.id, newPersonName: nil)
+                                                selectedFaceIDs.removeAll()
+                                                isSelectingFaces = false
+                                            }
+                                        }
+                                    } label: {
+                                        Label("Asignar a…", systemImage: "person.crop.circle.badge.checkmark")
+                                    }
+                                    .buttonStyle(MemoraButtonStyle())
+                                }
+
+                                Button(role: .destructive) {
+                                    try? store.deleteFalseFaceDetections(Array(selectedFaceIDs))
+                                    selectedFaceIDs.removeAll()
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(MemoraButtonStyle())
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 1. Grupos automáticos con miniaturas de rostros y asignación en 1 toque
+            if !store.library.clusters.isEmpty {
+                SectionHeading(title: "Grupos detectados automáticamente (\(store.library.clusters.count))")
+                ForEach(store.library.clusters) { cluster in
+                    let clusterFaces = cluster.faceIDs.compactMap { id in
+                        store.library.detectedFaces.first(where: { $0.id == id })
+                    }
+                    Panel {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 12) {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 6) {
+                                        ForEach(clusterFaces.prefix(5)) { face in
+                                            if let crop = store.faceCropImage(for: face) {
+                                                Image(uiImage: crop)
+                                                    .resizable()
+                                                    .scaledToFill()
+                                                    .frame(width: 46, height: 46)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                            }
+                                        }
+                                    }
+                                }
+                                .frame(maxWidth: 160)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Grupo de \(cluster.faceIDs.count) rostros")
+                                        .font(MemoraStyle.title(17))
+                                    Text("Coincidencia biométrica alta")
+                                        .font(.caption2)
+                                        .foregroundStyle(MemoraStyle.muted)
+                                }
+                                Spacer()
+                                Button("Nombrar") {
+                                    clusterPersonName = cluster.suggestedName ?? ""
+                                    namingCluster = cluster
+                                }
+                                .buttonStyle(MemoraButtonStyle(prominent: true))
+                            }
+
+                            // Asignación en 1 solo toque a personas existentes
+                            if !store.library.people.isEmpty {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 6) {
+                                        Text("1-Toque:")
+                                            .font(.caption2.bold())
+                                            .foregroundStyle(MemoraStyle.muted)
+                                        ForEach(store.library.people) { person in
+                                            Button {
+                                                try? store.assignClusterToExistingPerson(cluster.id, personID: person.id)
+                                            } label: {
+                                                Text("Es \(person.name)")
+                                                    .font(.caption.bold())
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 5)
+                                                    .background(MemoraStyle.raised, in: Capsule())
+                                                    .foregroundStyle(MemoraStyle.cream)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                        Button(role: .destructive) {
+                                            try? store.deleteFalseFaceDetections(cluster.faceIDs)
+                                        } label: {
+                                            Text("Descartar")
+                                                .font(.caption)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 5)
+                                                .background(Color.red.opacity(0.15), in: Capsule())
+                                                .foregroundStyle(.red)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Cuadrícula de todos los rostros individuales sin identificar
+            if !unassignedFaces.isEmpty {
+                SectionHeading(title: "Todos los rostros sin identificar (\(unassignedFaces.count))")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 82, maximum: 105), spacing: 8)], spacing: 8) {
+                    ForEach(unassignedFaces) { face in
+                        let isSelected = selectedFaceIDs.contains(face.id)
+                        ZStack(alignment: .topTrailing) {
+                            VStack(spacing: 4) {
+                                if let crop = store.faceCropImage(for: face) {
+                                    Image(uiImage: crop)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 78, height: 78)
+                                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 12)
+                                                .stroke(isSelected ? MemoraStyle.cream : MemoraStyle.line, lineWidth: isSelected ? 2.5 : 1)
+                                        )
+                                } else {
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .fill(MemoraStyle.surface)
+                                        .frame(width: 78, height: 78)
+                                        .overlay(Image(systemName: "person.crop.square").foregroundStyle(MemoraStyle.muted))
+                                }
+
+                                if !isSelectingFaces {
+                                    Menu {
+                                        Button("Nueva persona con similares…") {
+                                            let similar = store.similarUnassignedFaces(to: face.id)
+                                            selectedFaceIDs = Set(similar.prefix(400))
+                                            batchNewPersonName = ""
+                                            showingBatchNewPerson = true
+                                        }
+                                        if !store.library.people.isEmpty {
+                                            Divider()
+                                            ForEach(store.library.people) { person in
+                                                Button("Es \(person.name) (+ similares)") {
+                                                    let similar = store.similarUnassignedFaces(to: face.id)
+                                                    try? store.batchAssignFaces(similar, toPersonID: person.id, newPersonName: nil)
+                                                }
+                                                Button("Solo este rostro es \(person.name)") {
+                                                    try? store.batchAssignFaces([face.id], toPersonID: person.id, newPersonName: nil)
+                                                }
+                                            }
+                                        }
+                                        Divider()
+                                        Button("Eliminar sujeto falso", role: .destructive) {
+                                            try? store.deleteFalseFaceDetections([face.id])
+                                        }
+                                    } label: {
+                                        Text("Identificar")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(MemoraStyle.cream)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
+                            .padding(4)
+                            .background(MemoraStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+
+                            if isSelected {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(MemoraStyle.cream)
+                                    .padding(6)
+                            }
+                        }
+                        .onTapGesture {
+                            if isSelectingFaces {
+                                if isSelected {
+                                    selectedFaceIDs.remove(face.id)
+                                } else if selectedFaceIDs.count < 400 {
+                                    selectedFaceIDs.insert(face.id)
+                                }
+                            } else {
+                                isSelectingFaces = true
+                                selectedFaceIDs.insert(face.id)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Tab 2: Revisar con Confirmación Masiva en 1 Toque
+    @ViewBuilder
+    private var fastReviewSection: some View {
+        if suggestedFaces.isEmpty {
+            EmptyMemory(symbol: "checkmark.circle",
+                        title: "Todo al día",
+                        message: "No hay coincidencias pendientes de confirmación.")
+        } else {
+            Panel {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(suggestedFaces.count) coincidencia(s) sugerida(s)")
+                            .font(.subheadline.bold())
+                        Text("Confirma todas en un toque para entrenar el autoconocimiento al instante.")
+                            .font(.caption2)
+                            .foregroundStyle(MemoraStyle.muted)
+                    }
+                    Spacer()
+                    Button("Confirmar todas") {
+                        try? store.confirmAllSuggestedFaces()
+                    }
+                    .buttonStyle(MemoraButtonStyle(prominent: true))
+                }
+            }
+
+            ForEach(suggestedFaces) { face in
+                Panel {
+                    HStack(spacing: 12) {
+                        if let crop = store.faceCropImage(for: face) {
+                            Image(uiImage: crop)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 58, height: 58)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        } else if let asset = store.library.assets.first(where: { $0.id == face.assetID }),
+                                  let thumb = store.thumbnail(for: asset) {
+                            Image(uiImage: thumb)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 58, height: 58)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            if let pID = face.personID, let person = store.library.people.first(where: { $0.id == pID }) {
+                                Text("¿Es \(person.name)?")
+                                    .font(MemoraStyle.title(18))
+                            } else {
+                                Text("Coincidencia sugerida")
+                                    .font(MemoraStyle.title(18))
+                            }
+                            Text(String(format: "Similitud: %.0f%% · Autoconocimiento", face.confidence * 100))
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
+
+                        Spacer()
+
+                        HStack(spacing: 6) {
+                            if let pID = face.personID {
+                                Button {
+                                    try? store.confirmFaceReview(faceID: face.id, personID: pID)
+                                } label: {
+                                    Image(systemName: "checkmark")
+                                        .font(.subheadline.bold())
+                                }
+                                .buttonStyle(MemoraButtonStyle(prominent: true))
+                            }
+
+                            Button {
+                                try? store.rejectFaceSuggestion(faceID: face.id)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.subheadline.bold())
+                            }
+                            .buttonStyle(MemoraButtonStyle())
+
+                            Menu {
+                                ForEach(store.library.people) { other in
+                                    Button("Es \(other.name)") {
+                                        try? store.correctFace(faceID: face.id, correctPersonID: other.id)
+                                    }
+                                }
+                                Divider()
+                                Button("Eliminar sujeto falso", role: .destructive) {
+                                    try? store.deleteFalseFaceDetections([face.id])
+                                }
+                            } label: {
+                                Image(systemName: "ellipsis")
+                                    .font(.subheadline)
+                                    .padding(8)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1282,13 +1788,27 @@ struct FaceTaggingSheet: View {
                             .overlay(RoundedRectangle(cornerRadius: 16).stroke(MemoraStyle.line, lineWidth: 1))
                     }
 
-                    Text("Rostros en esta foto")
-                        .font(MemoraStyle.title(22))
+                    HStack {
+                        Text("Rostros humanos en esta foto (\(faces.count))")
+                            .font(MemoraStyle.title(21))
+                        Spacer()
+                        Button {
+                            triggerFaceAnalysis()
+                        } label: {
+                            if analyzing {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Label("Re-escanear", systemImage: "arrow.clockwise")
+                                    .font(.caption.bold())
+                            }
+                        }
+                        .buttonStyle(MemoraButtonStyle())
+                    }
 
                     if faces.isEmpty {
                         Panel {
                             VStack(alignment: .leading, spacing: 10) {
-                                Text("Aún no se han detectado rostros en esta imagen.")
+                                Text("No se detectaron rostros humanos válidos en esta imagen.")
                                     .font(.subheadline).foregroundStyle(MemoraStyle.muted)
                                 Button {
                                     triggerFaceAnalysis()
@@ -1296,7 +1816,7 @@ struct FaceTaggingSheet: View {
                                     if analyzing {
                                         ProgressView().tint(.white)
                                     } else {
-                                        Label("Detectar rostros con Face Engine v2", systemImage: "faceid")
+                                        Label("Detectar con Face Engine v2.5", systemImage: "faceid")
                                     }
                                 }
                                 .buttonStyle(MemoraButtonStyle(prominent: true))
@@ -1307,10 +1827,18 @@ struct FaceTaggingSheet: View {
                             ForEach(faces) { face in
                                 Panel {
                                     VStack(alignment: .leading, spacing: 10) {
-                                        HStack {
-                                            Image(systemName: "person.crop.circle")
-                                                .font(.title2)
-                                                .foregroundStyle(MemoraStyle.cream)
+                                        HStack(spacing: 12) {
+                                            if let crop = store.faceCropImage(for: face) {
+                                                Image(uiImage: crop)
+                                                    .resizable()
+                                                    .scaledToFill()
+                                                    .frame(width: 54, height: 54)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                            } else {
+                                                Image(systemName: "person.crop.circle")
+                                                    .font(.title2)
+                                                    .foregroundStyle(MemoraStyle.cream)
+                                            }
                                             VStack(alignment: .leading, spacing: 2) {
                                                 if let pID = face.personID, let person = store.library.people.first(where: { $0.id == pID }) {
                                                     Text("Esta persona es: \(person.name)")
@@ -1326,6 +1854,14 @@ struct FaceTaggingSheet: View {
                                                     .foregroundStyle(MemoraStyle.muted)
                                             }
                                             Spacer()
+                                            Button(role: .destructive) {
+                                                try? store.deleteFalseFaceDetections([face.id])
+                                            } label: {
+                                                Image(systemName: "trash")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.red)
+                                            }
+                                            .buttonStyle(.plain)
                                         }
 
                                         Divider()
@@ -1377,9 +1913,9 @@ struct FaceTaggingSheet: View {
                     Panel {
                         Toggle(isOn: $learnAsExemplar) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Aprender para reconocimiento automático")
+                                Text("Autoconocimiento y propagación en cascada")
                                     .font(.subheadline.bold())
-                                Text("Al asignar, Memora actualizará el prototipo facial y buscará esta persona en el resto de tu biblioteca.")
+                                Text("Al identificar este rostro, Memora aprenderá sus rasgos y etiquetará automáticamente fotos similares y álbumes.")
                                     .font(.caption2)
                                     .foregroundStyle(MemoraStyle.muted)
                             }
@@ -1434,7 +1970,7 @@ struct FaceTaggingSheet: View {
                 learnAsExemplar: learnAsExemplar
             )
             if let p = store.library.people.first(where: { $0.id == personID }) {
-                store.notice = "Rostro asignado a \(p.name)."
+                store.notice = "Rostro asignado a \(p.name) con autoconocimiento."
             }
         } catch {
             store.notice = error.localizedDescription
@@ -1481,10 +2017,28 @@ struct PersonDetailView: View {
         store.activeAssets.filter { $0.personIDs.contains(person.id) }
     }
 
+    private var pendingSuggestionsCount: Int {
+        store.activeSuggestedFaces.filter { $0.personID == person.id }.count
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                MemoraHeader(title: person.name, subtitle: "\(assets.count) recuerdos asociados")
+                MemoraHeader(title: person.name, subtitle: "\(assets.count) recuerdos asociados · \(relatedAlbums.count) álbumes")
+
+                HStack(spacing: 8) {
+                    ImportActions(store: store, targetPersonID: person.id)
+
+                    Menu("Combinar") {
+                        ForEach(store.library.people.filter { $0.id != person.id }) { target in
+                            Button("Combinar en \(target.name)") {
+                                do { try store.mergePeople(source: person.id, into: target.id) }
+                                catch { store.notice = error.localizedDescription }
+                            }
+                        }
+                    }
+                    .buttonStyle(MemoraButtonStyle())
+                }
 
                 // 1. SECCIONES ASOCIADAS
                 if !relatedSections.isEmpty {
@@ -1530,37 +2084,34 @@ struct PersonDetailView: View {
                     }
                 }
 
-                // 3. FOTOS POR CONFIRMAR
-                if !person.reviewCandidateAssetIDs.isEmpty {
+                // 3. FOTOS POR CONFIRMAR EN 1 TOQUE
+                if pendingSuggestionsCount > 0 {
                     Panel {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Image(systemName: "person.crop.circle.badge.questionmark")
-                                    .foregroundStyle(.orange)
-                                Text("\(person.reviewCandidateAssetIDs.count) fotos por confirmar")
-                                    .font(MemoraStyle.title(16))
-                                    .foregroundStyle(.orange)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Image(systemName: "person.crop.circle.badge.questionmark")
+                                        .foregroundStyle(.orange)
+                                    Text("\(pendingSuggestionsCount) foto(s) por confirmar")
+                                        .font(MemoraStyle.title(16))
+                                        .foregroundStyle(.orange)
+                                }
+                                Text("Face Engine v2.5 encontró coincidencias probables de \(person.name).")
+                                    .font(.caption).foregroundStyle(MemoraStyle.muted)
                             }
-                            Text("Face Engine v2 identificó posibles recuerdos con coincidencia moderada.")
-                                .font(.caption).foregroundStyle(MemoraStyle.muted)
+                            Spacer()
+                            Button("Confirmar todas") {
+                                try? store.confirmAllSuggestedFaces(forPersonID: person.id)
+                            }
+                            .buttonStyle(MemoraButtonStyle(prominent: true))
                         }
                     }
                 }
-
-                Menu("Combinar con otra persona") {
-                    ForEach(store.library.people.filter { $0.id != person.id }) { target in
-                        Button("Combinar en \(target.name)") {
-                            do { try store.mergePeople(source: person.id, into: target.id) }
-                            catch { store.notice = error.localizedDescription }
-                        }
-                    }
-                }
-                .buttonStyle(MemoraButtonStyle())
 
                 SectionHeading(title: "Todos los recuerdos de \(person.name)")
                 if assets.isEmpty {
                     EmptyMemory(symbol: "person.crop.rectangle", title: "Sin archivos asignados",
-                                message: "Mantén presionada una foto en la biblioteca y selecciona 'Esta persona de la foto es...' para agregarla.")
+                                message: "Importa hasta 400 fotos arriba o identifica a \(person.name) desde la pestaña Personas.")
                 } else {
                     AssetGrid(store: store, assets: assets)
                 }

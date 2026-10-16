@@ -31,10 +31,10 @@ struct MemoraApp: App {
             .background(MemoraStyle.background.ignoresSafeArea())
             .preferredColorScheme(.dark)
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active {
+                if phase == .background && !store.isPerformingBiometricAuth {
                     store.lockVault()
                     store.lockApp()
-                } else if store.authenticated && store.appBiometricsEnabled && store.appLocked {
+                } else if phase == .active && store.authenticated && store.appBiometricsEnabled && store.appLocked && !store.isPerformingBiometricAuth {
                     Task { _ = await store.unlockAppWithBiometrics() }
                 }
             }

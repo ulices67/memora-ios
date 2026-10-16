@@ -94,17 +94,21 @@ final class MemoryStore: ObservableObject {
     @Published private(set) var persistentSessionEnabled = true
     @Published private(set) var appBiometricsEnabled = false
     @Published var appLocked = false
+    @Published var isPerformingBiometricAuth = false
+    @Published var autoAlbumByFaceEnabled = true
     @Published private(set) var lastCloudflareBackupDate: Date?
 
     private var rootKey: SymmetricKey?
     private var vaultKey: SymmetricKey?
     private var vaultDeadline: Date?
     private var thumbnailCache: [UUID: UIImage] = [:]
+    private var faceCropCache: [UUID: UIImage] = [:]
 
     private let base: URL
     private let fileLimit = 50 * 1024 * 1024
     private let persistentSessionPreference = "memora.persistent-session.enabled"
     private let appBiometricsPreference = "memora.app-biometrics.enabled"
+    private let autoAlbumPreference = "memora.auto-album-face.enabled"
     private let lastBackupPreference = "memora.cloudflare.lastBackup"
 
     init() {
@@ -124,6 +128,9 @@ final class MemoryStore: ObservableObject {
             if UserDefaults.standard.object(forKey: persistentSessionPreference) != nil {
                 persistentSessionEnabled = UserDefaults.standard.bool(forKey: persistentSessionPreference)
             }
+            if UserDefaults.standard.object(forKey: autoAlbumPreference) != nil {
+                autoAlbumByFaceEnabled = UserDefaults.standard.bool(forKey: autoAlbumPreference)
+            }
             if UserDefaults.standard.bool(forKey: appBiometricsPreference) {
                 appBiometricsEnabled = true
                 appLocked = true
@@ -137,6 +144,9 @@ final class MemoryStore: ObservableObject {
                 do {
                     try loadLibrary()
                     authenticated = true
+                    Task { [weak self] in
+                        await self?.migrateAndCleanFacesIfNeeded()
+                    }
                 } catch {
                     rootKey = nil
                     PersistentSession.remove(account: account.id)
@@ -152,9 +162,14 @@ final class MemoryStore: ObservableObject {
     var hasAccount: Bool { account != nil || CloudAccountStore.lastActiveEmail() != nil }
     var vaultUnlocked: Bool { privateLibrary != nil && vaultKey != nil }
     var vaultConfigured: Bool { account?.wrappedVaultKey != nil }
+    var vaultBiometricsReady: Bool {
+        guard let account else { return false }
+        return BiometricVault.hasKey(account: account.id)
+    }
     var biometricAvailable: Bool { BiometricAuth.available() }
     var biometricType: BiometricAuth.BiometricType { BiometricAuth.biometricType }
     var activeAssets: [MemoryAsset] { library.assets.filter { $0.deletedAt == nil } }
+    var unalbumedPhotoAssets: [MemoryAsset] { activeAssets.filter { $0.kind == .photo && $0.albumIDs.isEmpty } }
     var trash: [MemoryAsset] { library.assets.filter { $0.deletedAt != nil } }
     var usedBytes: Int {
         library.assets.reduce(0) { $0 + $1.size } + (privateLibrary?.assets.reduce(0) { $0 + $1.size } ?? 0)
@@ -297,9 +312,16 @@ final class MemoryStore: ObservableObject {
         try? BiometricAccountKey.save(verifiedRoot, email: normalizedEmail)
         authenticated = true
         try? persistSessionIfEnabled()
+        Task { [weak self] in
+            await self?.migrateAndCleanFacesIfNeeded()
+        }
     }
 
     func loginWithBiometrics(email input: String) async throws {
+        guard !isPerformingBiometricAuth else { return }
+        isPerformingBiometricAuth = true
+        defer { isPerformingBiometricAuth = false }
+
         let normalizedEmail = normalized(input)
         var currentAccount = account
         if currentAccount == nil || currentAccount?.email != normalizedEmail {
@@ -323,6 +345,9 @@ final class MemoryStore: ObservableObject {
         self.account = record
         authenticated = true
         try? persistSessionIfEnabled()
+        Task { [weak self] in
+            await self?.migrateAndCleanFacesIfNeeded()
+        }
     }
 
     func hasBiometricsEnrolled(email: String) -> Bool {
@@ -372,10 +397,17 @@ final class MemoryStore: ObservableObject {
         let codeStr = MemoraCrypto.recoveryString(newRecovery)
         recoveryCode = codeStr
         syncRecoveryCodeToCloud(email: record.email, code: codeStr)
+        Task { [weak self] in
+            await self?.migrateAndCleanFacesIfNeeded()
+        }
         return codeStr
     }
 
     func recoverWithBiometrics(email input: String, newPassword: String) async throws {
+        guard !isPerformingBiometricAuth else { return }
+        isPerformingBiometricAuth = true
+        defer { isPerformingBiometricAuth = false }
+
         let normalizedEmail = normalized(input)
         var currentAccount = account
         if currentAccount == nil || currentAccount?.email != normalizedEmail {
@@ -412,6 +444,9 @@ final class MemoryStore: ObservableObject {
         let codeStr = MemoraCrypto.recoveryString(newRecovery)
         recoveryCode = codeStr
         syncRecoveryCodeToCloud(email: record.email, code: codeStr)
+        Task { [weak self] in
+            await self?.migrateAndCleanFacesIfNeeded()
+        }
     }
 
     func logout() {
@@ -419,6 +454,7 @@ final class MemoryStore: ObservableObject {
         lockVault()
         rootKey = nil
         thumbnailCache.removeAll()
+        faceCropCache.removeAll()
         library = MemoryLibrary()
         authenticated = false
         recoveryCode = nil
@@ -445,6 +481,7 @@ final class MemoryStore: ObservableObject {
         vaultKey = nil
         appLocked = false
         recoveryCode = nil
+        faceCropCache.removeAll()
         notice = "Los datos locales han sido borrados. Puedes crear una nueva cuenta o recuperarla desde iCloud."
     }
 
@@ -458,11 +495,18 @@ final class MemoryStore: ObservableObject {
         }
     }
 
+    func setAutoAlbumByFaceEnabled(_ enabled: Bool) {
+        autoAlbumByFaceEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: autoAlbumPreference)
+    }
+
     func setAppBiometricsEnabled(_ enabled: Bool) async throws {
         if enabled {
             guard BiometricAuth.available() else {
                 throw MemoraError.invalidInput("Face ID o Touch ID no está configurado en este dispositivo.")
             }
+            isPerformingBiometricAuth = true
+            defer { isPerformingBiometricAuth = false }
             let success = await BiometricAuth.authenticate(reason: "Verifica con Face ID para activar la protección de la app")
             guard success else {
                 throw MemoraError.invalidInput("No se pudo verificar tu identidad biométrica.")
@@ -478,6 +522,10 @@ final class MemoryStore: ObservableObject {
             appLocked = false
             return true
         }
+        guard !isPerformingBiometricAuth else { return false }
+        isPerformingBiometricAuth = true
+        defer { isPerformingBiometricAuth = false }
+
         let success = await BiometricAuth.authenticate(reason: "Desbloquea Memora para acceder a tu biblioteca")
         if success {
             appLocked = false
@@ -497,6 +545,7 @@ final class MemoryStore: ObservableObject {
     }
 
     func lockApp() {
+        guard !isPerformingBiometricAuth else { return }
         if appBiometricsEnabled {
             appLocked = true
         }
@@ -659,25 +708,63 @@ final class MemoryStore: ObservableObject {
         try saveLibrary()
     }
 
-    func mergePeople(source: UUID, into target: UUID) throws {
-        guard source != target, library.people.contains(where: { $0.id == source }),
-              library.people.contains(where: { $0.id == target }) else { return }
-        if FileManager.default.fileExists(atPath: vaultURL.path), !vaultUnlocked {
-            throw MemoraError.invalidInput("Desbloquea la bóveda antes de combinar personas.")
+    func deletePerson(_ personID: UUID) throws {
+        library.people.removeAll { $0.id == personID }
+        for idx in library.assets.indices {
+            library.assets[idx].personIDs.removeAll { $0 == personID }
         }
+        for fIdx in library.detectedFaces.indices {
+            if library.detectedFaces[fIdx].personID == personID {
+                library.detectedFaces[fIdx].personID = nil
+                library.detectedFaces[fIdx].reviewStatus = .unassigned
+            }
+        }
+        recomputeClusters()
+        try saveLibrary()
+    }
+
+    func mergePeople(source: UUID, into target: UUID) throws {
+        guard source != target,
+              let sourcePerson = library.people.first(where: { $0.id == source }),
+              let targetIdx = library.people.firstIndex(where: { $0.id == target }) else { return }
+
         library.assets = library.assets.map { asset in
             var result = asset
             result.personIDs = Array(Set(asset.personIDs.map { $0 == source ? target : $0 }))
             return result
         }
+
+        // Transferir todos los rostros detectados y exemplars al perfil destino
+        for fIdx in library.detectedFaces.indices {
+            if library.detectedFaces[fIdx].personID == source {
+                library.detectedFaces[fIdx].personID = target
+            }
+        }
+        for exID in sourcePerson.exemplarFaceIDs {
+            if !library.people[targetIdx].exemplarFaceIDs.contains(exID) {
+                library.people[targetIdx].exemplarFaceIDs.append(exID)
+            }
+        }
+        for revID in sourcePerson.reviewCandidateAssetIDs {
+            if !library.people[targetIdx].reviewCandidateAssetIDs.contains(revID) {
+                library.people[targetIdx].reviewCandidateAssetIDs.append(revID)
+            }
+        }
+        if library.people[targetIdx].coverAssetID == nil {
+            library.people[targetIdx].coverAssetID = sourcePerson.coverAssetID
+        }
+
         library.people.removeAll { $0.id == source }
+        updatePersonPrototype(personID: target)
+        reclassifyAllFacesForPerson(personID: target)
+
         if privateLibrary != nil {
             privateLibrary?.assets = privateLibrary!.assets.map { asset in
                 var result = asset
                 result.personIDs = Array(Set(asset.personIDs.map { $0 == source ? target : $0 }))
                 return result
             }
-            try saveVault()
+            try? saveVault()
         }
         try saveLibrary()
     }
@@ -739,34 +826,171 @@ final class MemoryStore: ObservableObject {
         try saveLibrary()
     }
 
+    // MARK: - Catálogo Facial, Recortes y Migración Automática
     var facesCatalog: [UUID: DetectedFace] {
         Dictionary(uniqueKeysWithValues: library.detectedFaces.map { ($0.id, $0) })
     }
 
-    func processFacesForAsset(_ assetID: UUID, image: UIImage) async {
-        let faces = await FaceEngine.analyzeImage(image, assetID: assetID)
-        guard !faces.isEmpty else { return }
+    var activeDetectedFaces: [DetectedFace] {
+        let activeIDs = Set(activeAssets.map(\.id))
+        return library.detectedFaces.filter { activeIDs.contains($0.assetID) }
+    }
 
-        // FaceEngine 2.0: Resolución multi-rostro para evitar identidades duplicadas en una misma foto
-        let resolved = FaceEngine.classifyAndResolveFaces(faces, against: library.people, facesCatalog: facesCatalog)
+    var activeUnassignedFaces: [DetectedFace] {
+        activeDetectedFaces.filter { $0.personID == nil && $0.reviewStatus == .unassigned }
+    }
 
-        for item in resolved {
+    var activeSuggestedFaces: [DetectedFace] {
+        activeDetectedFaces.filter { $0.reviewStatus == .suggested && $0.personID != nil }
+    }
+
+    func faceCropImage(for face: DetectedFace) -> UIImage? {
+        if let cached = faceCropCache[face.id] {
+            return cached
+        }
+        guard let asset = library.assets.first(where: { $0.id == face.assetID }),
+              let thumb = thumbnail(for: asset) else {
+            return nil
+        }
+        if let cropped = FaceEngine.cropFaceForDisplay(from: thumb, bbox: face.bbox) {
+            faceCropCache[face.id] = cropped
+            return cropped
+        }
+        return thumb
+    }
+
+    /// Limpia rostros huérfanos, elimina sujetos duplicados en una misma foto y migra vectores antiguos a 256D
+    func migrateAndCleanFacesIfNeeded() async {
+        guard authenticated else { return }
+        let activeIDs = Set(activeAssets.map(\.id))
+        var modified = false
+
+        // 1. Eliminar rostros de archivos borrados
+        let beforeCount = library.detectedFaces.count
+        library.detectedFaces.removeAll { !activeIDs.contains($0.assetID) }
+        if library.detectedFaces.count != beforeCount {
+            modified = true
+        }
+
+        // 2. Eliminar detecciones superpuestas (sujetos duplicados en la misma foto)
+        let groupedByAsset = Dictionary(grouping: library.detectedFaces, by: \.assetID)
+        var cleanedFaces: [DetectedFace] = []
+        for (_, assetFaces) in groupedByAsset {
+            let sorted = assetFaces.sorted { a, b in
+                let aConfirmed = (a.reviewStatus == .confirmed && a.personID != nil) ? 1 : 0
+                let bConfirmed = (b.reviewStatus == .confirmed && b.personID != nil) ? 1 : 0
+                if aConfirmed != bConfirmed { return aConfirmed > bConfirmed }
+                return (a.quality * a.confidence) > (b.quality * b.confidence)
+            }
+            var kept: [DetectedFace] = []
+            for candidate in sorted {
+                guard candidate.quality >= FaceEngine.recognitionGateMinimum else {
+                    modified = true
+                    continue
+                }
+                let overlaps = kept.contains { existing in
+                    FaceEngine.intersectionOverUnion(candidate.bbox, existing.bbox) > 0.30
+                }
+                if !overlaps {
+                    kept.append(candidate)
+                } else {
+                    modified = true
+                }
+            }
+            cleanedFaces.append(contentsOf: kept)
+        }
+        if modified {
+            library.detectedFaces = cleanedFaces
+        }
+
+        // 3. Reanalizar fotos con embeddings de dimensión antigua (!= 256)
+        let assetsNeedingUpgrade = activeAssets.filter { asset in
+            guard asset.kind == .photo else { return false }
+            let faces = library.detectedFaces.filter { $0.assetID == asset.id }
+            return faces.contains { $0.embedding.count != FaceEngine.embeddingDimension }
+        }
+
+        for asset in assetsNeedingUpgrade {
+            if let img = thumbnail(for: asset) {
+                await processFacesForAsset(asset.id, image: img, saveAndCluster: false)
+                modified = true
+            }
+        }
+
+        if modified {
+            for person in library.people {
+                updatePersonPrototype(personID: person.id)
+            }
+            for person in library.people {
+                reclassifyAllFacesForPerson(personID: person.id)
+            }
+            recomputeClusters()
+            try? saveLibrary()
+        }
+    }
+
+    func processFacesForAsset(_ assetID: UUID, image: UIImage, saveAndCluster: Bool = true) async {
+        let newFaces = await FaceEngine.analyzeImage(image, assetID: assetID)
+
+        // Conservar asignaciones confirmadas previas de esta foto para no perder etiquetas manuales
+        let previousConfirmed = library.detectedFaces.filter {
+            $0.assetID == assetID && $0.reviewStatus == .confirmed && $0.personID != nil
+        }
+        // Si la foto ya tenía una persona asignada directamente y hay 1 solo rostro, vincularlo
+        let assetAssignedPersonIDs = library.assets.first(where: { $0.id == assetID })?.personIDs ?? []
+
+        // Eliminar TODOS los rostros previos de este assetID para jamás duplicar sujetos en la misma foto
+        let removedIDs = Set(library.detectedFaces.filter { $0.assetID == assetID }.map(\.id))
+        for rID in removedIDs {
+            faceCropCache[rID] = nil
+        }
+        library.detectedFaces.removeAll { $0.assetID == assetID }
+
+        guard !newFaces.isEmpty else {
+            if saveAndCluster {
+                recomputeClusters()
+                try? saveLibrary()
+            }
+            return
+        }
+
+        let resolved = FaceEngine.classifyAndResolveFaces(newFaces, against: library.people, facesCatalog: facesCatalog)
+
+        for (idx, item) in resolved.enumerated() {
             var faceToAdd = item.face
-            library.detectedFaces.removeAll { $0.id == faceToAdd.id }
 
-            if let matchedPersonID = item.personID {
+            // Verificar si coincide espacialmente con un rostro previamente confirmado en esta foto
+            if let prev = previousConfirmed.first(where: { FaceEngine.intersectionOverUnion($0.bbox, faceToAdd.bbox) > 0.28 }),
+               let prevPersonID = prev.personID {
+                faceToAdd.personID = prevPersonID
+                faceToAdd.confidence = 1.0
+                faceToAdd.reviewStatus = .confirmed
+                try? assign(assetID, to: prevPersonID, saveImmediately: false)
+                if let pIdx = library.people.firstIndex(where: { $0.id == prevPersonID }) {
+                    library.people[pIdx].exemplarFaceIDs.removeAll { removedIDs.contains($0) }
+                    library.people[pIdx].exemplarFaceIDs.append(faceToAdd.id)
+                }
+            } else if resolved.count == 1 && assetAssignedPersonIDs.count == 1,
+                      let explicitPersonID = assetAssignedPersonIDs.first {
+                faceToAdd.personID = explicitPersonID
+                faceToAdd.confidence = 1.0
+                faceToAdd.reviewStatus = .confirmed
+                if let pIdx = library.people.firstIndex(where: { $0.id == explicitPersonID }) {
+                    if !library.people[pIdx].exemplarFaceIDs.contains(faceToAdd.id) {
+                        library.people[pIdx].exemplarFaceIDs.append(faceToAdd.id)
+                    }
+                }
+            } else if let matchedPersonID = item.personID {
                 if item.zone == .high {
                     faceToAdd.personID = matchedPersonID
                     faceToAdd.confidence = item.confidence
                     faceToAdd.reviewStatus = .confirmed
-                    try? assign(assetID, to: matchedPersonID)
+                    try? assign(assetID, to: matchedPersonID, saveImmediately: false)
 
-                    // Enrollment inteligente automático si cumple con calidad y diversidad
                     if let person = library.people.first(where: { $0.id == matchedPersonID }),
                        FaceEngine.shouldEnrollFace(faceToAdd, for: person, facesCatalog: facesCatalog) {
                         if let pIdx = library.people.firstIndex(where: { $0.id == matchedPersonID }) {
                             library.people[pIdx].exemplarFaceIDs.append(faceToAdd.id)
-                            updatePersonPrototype(personID: matchedPersonID)
                         }
                     }
                 } else if item.zone == .review {
@@ -779,26 +1003,225 @@ final class MemoryStore: ObservableObject {
                         }
                     }
                 }
+            } else if idx == 0, assetAssignedPersonIDs.count == 1, let explicitPersonID = assetAssignedPersonIDs.first {
+                faceToAdd.personID = explicitPersonID
+                faceToAdd.confidence = 0.95
+                faceToAdd.reviewStatus = .confirmed
             }
+
             library.detectedFaces.append(faceToAdd)
         }
-        recomputeClusters()
-        try? saveLibrary()
+
+        // Actualizar prototipos de personas afectadas
+        for p in library.people {
+            updatePersonPrototype(personID: p.id)
+        }
+
+        // Automatización inteligente: si la foto no tiene álbum y se reconoció una cara que está en álbumes, integrarla
+        if autoAlbumByFaceEnabled {
+            _ = autoIntegrateAssetIntoAlbumsByFace(assetID, saveImmediately: false)
+        }
+
+        if saveAndCluster {
+            recomputeClusters()
+            try? saveLibrary()
+        }
     }
 
+    // MARK: - Automatización Inteligente de Álbumes por Reconocimiento Facial
+    /// Integra automáticamente un archivo sin álbum en los álbumes donde aparezcan las mismas caras o personas
+    @discardableResult
+    func autoIntegrateAssetIntoAlbumsByFace(_ assetID: UUID, targetAlbumID: UUID? = nil, saveImmediately: Bool = true) -> Int {
+        guard let assetIdx = library.assets.firstIndex(where: { $0.id == assetID }),
+              library.assets[assetIdx].deletedAt == nil else { return 0 }
+
+        // Si es automático global, solo organizar elementos que están sin álbum (o hacia un targetAlbumID específico)
+        if targetAlbumID == nil && !library.assets[assetIdx].albumIDs.isEmpty {
+            return 0
+        }
+
+        let assetFaces = library.detectedFaces.filter { $0.assetID == assetID }
+        let assetPersonIDs = Set(library.assets[assetIdx].personIDs).union(assetFaces.compactMap(\.personID))
+        guard !assetFaces.isEmpty || !assetPersonIDs.isEmpty else { return 0 }
+
+        let candidateAlbums: [MemoryAlbum] = {
+            if let targetAlbumID {
+                return library.albums.filter { $0.id == targetAlbumID }
+            }
+            return library.albums
+        }()
+
+        var addedCount = 0
+
+        for album in candidateAlbums {
+            guard !library.assets[assetIdx].albumIDs.contains(album.id) else { continue }
+
+            let albumAssets = activeAssets.filter { $0.albumIDs.contains(album.id) && $0.id != assetID }
+            guard !albumAssets.isEmpty else { continue }
+
+            let albumAssetIDs = Set(albumAssets.map(\.id))
+            let albumPersonIDs = Set(albumAssets.flatMap(\.personIDs))
+                .union(library.detectedFaces.filter { albumAssetIDs.contains($0.assetID) }.compactMap(\.personID))
+
+            // Criterio 1: Coincidencia por Persona ya identificada dentro del álbum
+            var matchesAlbum = !assetPersonIDs.isDisjoint(with: albumPersonIDs)
+
+            // Criterio 2: Coincidencia directa de embeddings faciales con las caras que están dentro del álbum
+            // (Funciona incluso sin haber creado personas manualmente)
+            if !matchesAlbum && !assetFaces.isEmpty {
+                let albumFaces = library.detectedFaces.filter {
+                    albumAssetIDs.contains($0.assetID) && !$0.embedding.isEmpty
+                }
+                if !albumFaces.isEmpty {
+                    let albumProto = FaceEngine.computePrototype(from: albumFaces.map(\.embedding))
+                    for face in assetFaces {
+                        if let proto = albumProto, FaceEngine.cosineSimilarity(face.embedding, proto) >= FaceEngine.thresholdAccept {
+                            matchesAlbum = true
+                            break
+                        }
+                        let maxDirect = albumFaces.prefix(25).map { FaceEngine.cosineSimilarity(face.embedding, $0.embedding) }.max() ?? 0.0
+                        if maxDirect >= FaceEngine.thresholdAccept {
+                            matchesAlbum = true
+                            break
+                        }
+                    }
+                }
+            }
+
+            if matchesAlbum {
+                library.assets[assetIdx].albumIDs.append(album.id)
+                addedCount += 1
+            }
+        }
+
+        if addedCount > 0 && saveImmediately {
+            try? saveLibrary()
+        }
+        return addedCount
+    }
+
+    /// Escanea fotos sin álbum (o candidatas para un álbum específico), detecta caras si falta y las integra automáticamente
+    @discardableResult
+    func autoOrganizeUnalbumedAssetsByFaces(targetAlbumID: UUID? = nil) async -> Int {
+        busy = true
+        defer { busy = false }
+
+        // 1. Asegurar que todas las fotos activas tengan rostros analizados con el motor actual
+        for asset in activeAssets where asset.kind == .photo {
+            let existingFaces = library.detectedFaces.filter { $0.assetID == asset.id }
+            let needsAnalysis = existingFaces.isEmpty || existingFaces.contains { $0.embedding.count != FaceEngine.embeddingDimension }
+            if needsAnalysis, let img = thumbnail(for: asset) {
+                await processFacesForAsset(asset.id, image: img, saveAndCluster: false)
+            }
+        }
+
+        // 2. Propagar autoconocimiento de todas las personas conocidas
+        for person in library.people {
+            updatePersonPrototype(personID: person.id)
+            reclassifyAllFacesForPerson(personID: person.id)
+        }
+
+        // 3. Evaluar candidatas para integrar en álbumes
+        let candidates: [MemoryAsset] = {
+            if let targetAlbumID {
+                return activeAssets.filter { !$0.albumIDs.contains(targetAlbumID) }
+            }
+            return activeAssets.filter { $0.albumIDs.isEmpty }
+        }()
+
+        var integratedAssets = 0
+        for candidate in candidates {
+            let count = autoIntegrateAssetIntoAlbumsByFace(candidate.id, targetAlbumID: targetAlbumID, saveImmediately: false)
+            if count > 0 {
+                integratedAssets += 1
+            }
+        }
+
+        recomputeClusters()
+        try? saveLibrary()
+
+        if integratedAssets > 0 {
+            notice = "Automatización inteligente: \(integratedAssets) recuerdo\(integratedAssets == 1 ? "" : "s") integrado\(integratedAssets == 1 ? "" : "s") en álbumes por reconocimiento facial."
+        } else {
+            notice = "Análisis completado. No se encontraron nuevas coincidencias faciales para integrar en álbumes."
+        }
+        return integratedAssets
+    }
+
+    // MARK: - Autoconocimiento y Gestión Masiva de Personas
     func confirmFaceReview(faceID: UUID, personID: UUID) throws {
         guard let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }),
               let pIdx = library.people.firstIndex(where: { $0.id == personID }) else { return }
         library.detectedFaces[fIdx].personID = personID
+        library.detectedFaces[fIdx].confidence = 1.0
         library.detectedFaces[fIdx].reviewStatus = .confirmed
         let assetID = library.detectedFaces[fIdx].assetID
-        try assign(assetID, to: personID)
+        try assign(assetID, to: personID, saveImmediately: false)
         library.people[pIdx].reviewCandidateAssetIDs.removeAll { $0 == assetID }
 
         if !library.people[pIdx].exemplarFaceIDs.contains(faceID) {
             library.people[pIdx].exemplarFaceIDs.append(faceID)
         }
+        if library.people[pIdx].coverAssetID == nil {
+            library.people[pIdx].coverAssetID = assetID
+        }
+
+        // Autoconocimiento en cascada: aprender de esta confirmación y buscar más rostros iguales
         updatePersonPrototype(personID: personID)
+        reclassifyAllFacesForPerson(personID: personID)
+        if autoAlbumByFaceEnabled {
+            _ = autoIntegrateAssetIntoAlbumsByFace(assetID, saveImmediately: false)
+        }
+        recomputeClusters()
+        try saveLibrary()
+    }
+
+    /// Confirma de forma masiva todas las sugerencias pendientes (de una persona o de todas)
+    @discardableResult
+    func confirmAllSuggestedFaces(forPersonID: UUID? = nil) throws -> Int {
+        var confirmedCount = 0
+        var affectedPersons = Set<UUID>()
+
+        for fIdx in library.detectedFaces.indices {
+            let face = library.detectedFaces[fIdx]
+            guard face.reviewStatus == .suggested, let pID = face.personID else { continue }
+            if let filterID = forPersonID, pID != filterID { continue }
+
+            library.detectedFaces[fIdx].reviewStatus = .confirmed
+            library.detectedFaces[fIdx].confidence = 1.0
+            try? assign(face.assetID, to: pID, saveImmediately: false)
+
+            if let pIdx = library.people.firstIndex(where: { $0.id == pID }) {
+                library.people[pIdx].reviewCandidateAssetIDs.removeAll { $0 == face.assetID }
+                if !library.people[pIdx].exemplarFaceIDs.contains(face.id) {
+                    library.people[pIdx].exemplarFaceIDs.append(face.id)
+                }
+            }
+            affectedPersons.insert(pID)
+            confirmedCount += 1
+        }
+
+        for pID in affectedPersons {
+            updatePersonPrototype(personID: pID)
+            reclassifyAllFacesForPerson(personID: pID)
+        }
+        recomputeClusters()
+        try saveLibrary()
+        return confirmedCount
+    }
+
+    func rejectFaceSuggestion(faceID: UUID) throws {
+        guard let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }) else { return }
+        let oldPersonID = library.detectedFaces[fIdx].personID
+        let assetID = library.detectedFaces[fIdx].assetID
+        library.detectedFaces[fIdx].personID = nil
+        library.detectedFaces[fIdx].reviewStatus = .unassigned
+        library.detectedFaces[fIdx].confidence = 0.0
+
+        if let oldPersonID, let pIdx = library.people.firstIndex(where: { $0.id == oldPersonID }) {
+            library.people[pIdx].reviewCandidateAssetIDs.removeAll { $0 == assetID }
+        }
+        recomputeClusters()
         try saveLibrary()
     }
 
@@ -808,10 +1231,11 @@ final class MemoryStore: ObservableObject {
 
         let oldPersonID = library.detectedFaces[fIdx].personID
         library.detectedFaces[fIdx].personID = correctPersonID
+        library.detectedFaces[fIdx].confidence = 1.0
         library.detectedFaces[fIdx].reviewStatus = .confirmed
         let assetID = library.detectedFaces[fIdx].assetID
 
-        try assign(assetID, to: correctPersonID)
+        try assign(assetID, to: correctPersonID, saveImmediately: false)
 
         if let oldPersonID, let oldIdx = library.people.firstIndex(where: { $0.id == oldPersonID }) {
             library.people[oldIdx].exemplarFaceIDs.removeAll { $0 == faceID }
@@ -823,13 +1247,20 @@ final class MemoryStore: ObservableObject {
             library.people[pIdx].exemplarFaceIDs.append(faceID)
         }
         updatePersonPrototype(personID: correctPersonID)
+        reclassifyAllFacesForPerson(personID: correctPersonID)
+        recomputeClusters()
         try saveLibrary()
     }
 
     func updatePersonPrototype(personID: UUID) {
         guard let pIdx = library.people.firstIndex(where: { $0.id == personID }) else { return }
         let catalog = facesCatalog
-        let embeddings: [[Float]] = library.people[pIdx].exemplarFaceIDs.compactMap { catalog[$0]?.embedding }
+        var embeddings: [[Float]] = library.people[pIdx].exemplarFaceIDs.compactMap { catalog[$0]?.embedding }
+        if embeddings.isEmpty {
+            embeddings = library.detectedFaces
+                .filter { $0.personID == personID && $0.reviewStatus == .confirmed }
+                .map(\.embedding)
+        }
         library.people[pIdx].prototype = FaceEngine.computePrototype(from: embeddings)
         library.people[pIdx].prototypes = FaceEngine.computeMultiPrototypes(from: embeddings)
     }
@@ -838,6 +1269,12 @@ final class MemoryStore: ObservableObject {
         guard let cluster = library.clusters.first(where: { $0.id == clusterID }) else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // Si ya existe una persona con ese mismo nombre, fusionar en esa persona directamente
+        if let existingPerson = library.people.first(where: { $0.name.lowercased() == trimmed.lowercased() }) {
+            try assignClusterToExistingPerson(clusterID, personID: existingPerson.id)
+            return
+        }
 
         let repFace = library.detectedFaces.first(where: { $0.id == cluster.representativeFaceID })
         let person = MemoryPerson(
@@ -851,15 +1288,146 @@ final class MemoryStore: ObservableObject {
         for faceID in cluster.faceIDs {
             if let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }) {
                 library.detectedFaces[fIdx].personID = person.id
+                library.detectedFaces[fIdx].confidence = 1.0
                 library.detectedFaces[fIdx].reviewStatus = .confirmed
                 let assetID = library.detectedFaces[fIdx].assetID
-                try? assign(assetID, to: person.id)
+                try? assign(assetID, to: person.id, saveImmediately: false)
+                if autoAlbumByFaceEnabled {
+                    _ = autoIntegrateAssetIntoAlbumsByFace(assetID, saveImmediately: false)
+                }
             }
         }
 
         updatePersonPrototype(personID: person.id)
-        library.clusters.removeAll { $0.id == clusterID }
+        reclassifyAllFacesForPerson(personID: person.id)
+        recomputeClusters()
         try saveLibrary()
+    }
+
+    func assignClusterToExistingPerson(_ clusterID: UUID, personID: UUID) throws {
+        guard let cluster = library.clusters.first(where: { $0.id == clusterID }) else { return }
+        try batchAssignFaces(cluster.faceIDs, toPersonID: personID)
+    }
+
+    /// Asigna un lote masivo de rostros seleccionados a una persona existente o nueva y activa el autoconocimiento
+    func batchAssignFaces(_ faceIDs: [UUID], toPersonID: UUID?, newPersonName: String? = nil) throws {
+        guard !faceIDs.isEmpty else { return }
+        var finalPersonID = toPersonID
+
+        if let newPersonName {
+            let trimmed = newPersonName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                if let existing = library.people.first(where: { $0.name.lowercased() == trimmed.lowercased() }) {
+                    finalPersonID = existing.id
+                } else {
+                    let firstAssetID = library.detectedFaces.first(where: { faceIDs.contains($0.id) })?.assetID
+                    let newPerson = MemoryPerson(
+                        id: UUID(),
+                        name: trimmed,
+                        coverAssetID: firstAssetID,
+                        exemplarFaceIDs: faceIDs
+                    )
+                    library.people.append(newPerson)
+                    finalPersonID = newPerson.id
+                }
+            }
+        }
+
+        guard let targetID = finalPersonID,
+              let pIdx = library.people.firstIndex(where: { $0.id == targetID }) else { return }
+
+        let faceSet = Set(faceIDs)
+        for fIdx in library.detectedFaces.indices where faceSet.contains(library.detectedFaces[fIdx].id) {
+            let face = library.detectedFaces[fIdx]
+            library.detectedFaces[fIdx].personID = targetID
+            library.detectedFaces[fIdx].confidence = 1.0
+            library.detectedFaces[fIdx].reviewStatus = .confirmed
+            try? assign(face.assetID, to: targetID, saveImmediately: false)
+
+            if !library.people[pIdx].exemplarFaceIDs.contains(face.id) {
+                library.people[pIdx].exemplarFaceIDs.append(face.id)
+            }
+            library.people[pIdx].reviewCandidateAssetIDs.removeAll { $0 == face.assetID }
+            if library.people[pIdx].coverAssetID == nil {
+                library.people[pIdx].coverAssetID = face.assetID
+            }
+            if autoAlbumByFaceEnabled {
+                _ = autoIntegrateAssetIntoAlbumsByFace(face.assetID, saveImmediately: false)
+            }
+        }
+
+        // Autoconocimiento: actualizar prototipo y reclasificar toda la biblioteca
+        updatePersonPrototype(personID: targetID)
+        reclassifyAllFacesForPerson(personID: targetID)
+        recomputeClusters()
+        try saveLibrary()
+    }
+
+    /// Elimina detecciones falsas o irrelevantes seleccionadas por el usuario
+    func deleteFalseFaceDetections(_ faceIDs: [UUID]) throws {
+        let removeSet = Set(faceIDs)
+        for id in removeSet {
+            faceCropCache[id] = nil
+        }
+        library.detectedFaces.removeAll { removeSet.contains($0.id) }
+        for pIdx in library.people.indices {
+            library.people[pIdx].exemplarFaceIDs.removeAll { removeSet.contains($0) }
+        }
+        recomputeClusters()
+        try saveLibrary()
+    }
+
+    /// Encuentra automáticamente todos los rostros sin identificar similares a un rostro semilla
+    func similarUnassignedFaces(to seedFaceID: UUID, threshold: Double = 0.50) -> [UUID] {
+        guard let seed = library.detectedFaces.first(where: { $0.id == seedFaceID }) else {
+            return [seedFaceID]
+        }
+        return activeUnassignedFaces.compactMap { candidate in
+            if candidate.id == seedFaceID { return candidate.id }
+            let sim = FaceEngine.cosineSimilarity(seed.embedding, candidate.embedding)
+            return sim >= threshold ? candidate.id : nil
+        }
+    }
+
+    /// Ejecuta un ciclo completo de autoconocimiento en toda la biblioteca
+    func runFullFaceAutoKnowledge() async {
+        busy = true
+        defer { busy = false }
+
+        await migrateAndCleanFacesIfNeeded()
+
+        // Analizar cualquier foto que aún no tenga rostros procesados
+        for asset in activeAssets where asset.kind == .photo {
+            let faces = library.detectedFaces.filter { $0.assetID == asset.id }
+            if faces.isEmpty, let img = thumbnail(for: asset) {
+                await processFacesForAsset(asset.id, image: img, saveAndCluster: false)
+            }
+        }
+
+        for person in library.people {
+            updatePersonPrototype(personID: person.id)
+        }
+        for person in library.people {
+            reclassifyAllFacesForPerson(personID: person.id)
+        }
+
+        var autoIntegrated = 0
+        if autoAlbumByFaceEnabled {
+            for asset in unalbumedPhotoAssets {
+                if autoIntegrateAssetIntoAlbumsByFace(asset.id, saveImmediately: false) > 0 {
+                    autoIntegrated += 1
+                }
+            }
+        }
+
+        recomputeClusters()
+        try? saveLibrary()
+
+        if autoIntegrated > 0 {
+            notice = "Autoconocimiento completado: rostros agrupados y \(autoIntegrated) foto\(autoIntegrated == 1 ? "" : "s") integrada\(autoIntegrated == 1 ? "" : "s") en álbumes."
+        } else {
+            notice = "Autoconocimiento y limpieza de rostros completados."
+        }
     }
 
     func facesInAsset(_ assetID: UUID) -> [DetectedFace] {
@@ -889,19 +1457,23 @@ final class MemoryStore: ObservableObject {
         var targetPersonID = personID
 
         if let newPersonName, !newPersonName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let newPerson = MemoryPerson(
-                id: UUID(),
-                name: newPersonName.trimmingCharacters(in: .whitespacesAndNewlines),
-                coverAssetID: assetID,
-                exemplarFaceIDs: [faceID]
-            )
-            library.people.append(newPerson)
-            targetPersonID = newPerson.id
+            let trimmed = newPersonName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let existing = library.people.first(where: { $0.name.lowercased() == trimmed.lowercased() }) {
+                targetPersonID = existing.id
+            } else {
+                let newPerson = MemoryPerson(
+                    id: UUID(),
+                    name: trimmed,
+                    coverAssetID: assetID,
+                    exemplarFaceIDs: [faceID]
+                )
+                library.people.append(newPerson)
+                targetPersonID = newPerson.id
+            }
         }
 
         guard let finalPersonID = targetPersonID,
               let pIdx = library.people.firstIndex(where: { $0.id == finalPersonID }) else {
-            // Si personID es nil y no hay nuevo nombre, desasignar
             if let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }) {
                 let oldPersonID = library.detectedFaces[fIdx].personID
                 library.detectedFaces[fIdx].personID = nil
@@ -911,14 +1483,15 @@ final class MemoryStore: ObservableObject {
                     updatePersonPrototype(personID: oldPersonID)
                 }
             }
+            recomputeClusters()
             try saveLibrary()
             return
         }
 
-        // Asignar el rostro al asset y personID
         if let fIdx = library.detectedFaces.firstIndex(where: { $0.id == faceID }) {
             let oldPersonID = library.detectedFaces[fIdx].personID
             library.detectedFaces[fIdx].personID = finalPersonID
+            library.detectedFaces[fIdx].confidence = 1.0
             library.detectedFaces[fIdx].reviewStatus = .confirmed
             if let oldPersonID, oldPersonID != finalPersonID,
                let oldPIdx = library.people.firstIndex(where: { $0.id == oldPersonID }) {
@@ -927,7 +1500,7 @@ final class MemoryStore: ObservableObject {
             }
         }
 
-        try assign(assetID, to: finalPersonID)
+        try assign(assetID, to: finalPersonID, saveImmediately: false)
 
         if learnAsExemplar {
             if !library.people[pIdx].exemplarFaceIDs.contains(faceID) {
@@ -935,26 +1508,37 @@ final class MemoryStore: ObservableObject {
             }
             updatePersonPrototype(personID: finalPersonID)
             reclassifyAllFacesForPerson(personID: finalPersonID)
+            if autoAlbumByFaceEnabled {
+                _ = autoIntegrateAssetIntoAlbumsByFace(assetID, saveImmediately: false)
+            }
         }
 
+        recomputeClusters()
         try saveLibrary()
     }
 
     func reclassifyAllFacesForPerson(personID: UUID) {
-        guard let person = library.people.first(where: { $0.id == personID }) else { return }
+        guard library.people.contains(where: { $0.id == personID }) else { return }
         let catalog = facesCatalog
 
         for fIdx in library.detectedFaces.indices {
             let face = library.detectedFaces[fIdx]
-            guard face.personID != personID, face.quality >= FaceEngine.recognitionGateMinimum else { continue }
+            // No sobrescribir rostros ya confirmados manualmente para otra persona
+            guard face.reviewStatus != .confirmed || face.personID == nil else { continue }
+            guard face.quality >= FaceEngine.recognitionGateMinimum else { continue }
 
-            let classification = FaceEngine.classifyFace(face, against: [person], facesCatalog: catalog)
-            if classification.zone == .high, let matchedID = classification.personID {
+            let classification = FaceEngine.classifyFace(face, against: library.people, facesCatalog: catalog)
+            guard let matchedID = classification.personID else { continue }
+
+            if classification.zone == .high {
                 library.detectedFaces[fIdx].personID = matchedID
                 library.detectedFaces[fIdx].confidence = classification.confidence
                 library.detectedFaces[fIdx].reviewStatus = .confirmed
-                try? assign(face.assetID, to: matchedID)
-            } else if classification.zone == .review, let matchedID = classification.personID {
+                try? assign(face.assetID, to: matchedID, saveImmediately: false)
+                if autoAlbumByFaceEnabled {
+                    _ = autoIntegrateAssetIntoAlbumsByFace(face.assetID, saveImmediately: false)
+                }
+            } else if classification.zone == .review {
                 library.detectedFaces[fIdx].personID = matchedID
                 library.detectedFaces[fIdx].confidence = classification.confidence
                 library.detectedFaces[fIdx].reviewStatus = .suggested
@@ -968,7 +1552,7 @@ final class MemoryStore: ObservableObject {
     }
 
     func recomputeClusters() {
-        let unassigned = library.detectedFaces.filter { $0.personID == nil }
+        let unassigned = activeUnassignedFaces
         library.clusters = FaceEngine.clusterFaces(unassignedFaces: unassigned)
     }
 
@@ -983,11 +1567,32 @@ final class MemoryStore: ObservableObject {
         )
     }
 
-    func assign(_ assetID: UUID, to personID: UUID) throws {
-        guard library.people.contains(where: { $0.id == personID }),
+    func assign(_ assetID: UUID, to personID: UUID, saveImmediately: Bool = true) throws {
+        guard let pIdx = library.people.firstIndex(where: { $0.id == personID }),
               let index = library.assets.firstIndex(where: { $0.id == assetID }) else { return }
         if !library.assets[index].personIDs.contains(personID) {
             library.assets[index].personIDs.append(personID)
+        }
+        if library.people[pIdx].coverAssetID == nil {
+            library.people[pIdx].coverAssetID = assetID
+        }
+        // Si la foto tiene un único rostro detectado y aún no tenía persona, aprenderlo automáticamente
+        let assetFaces = library.detectedFaces.indices.filter { library.detectedFaces[$0].assetID == assetID }
+        if assetFaces.count == 1, let fIdx = assetFaces.first, library.detectedFaces[fIdx].personID == nil {
+            let fID = library.detectedFaces[fIdx].id
+            library.detectedFaces[fIdx].personID = personID
+            library.detectedFaces[fIdx].confidence = 1.0
+            library.detectedFaces[fIdx].reviewStatus = .confirmed
+            if !library.people[pIdx].exemplarFaceIDs.contains(fID) {
+                library.people[pIdx].exemplarFaceIDs.append(fID)
+            }
+            if saveImmediately {
+                updatePersonPrototype(personID: personID)
+                reclassifyAllFacesForPerson(personID: personID)
+                recomputeClusters()
+            }
+        }
+        if saveImmediately {
             try saveLibrary()
         }
     }
@@ -995,18 +1600,33 @@ final class MemoryStore: ObservableObject {
     func moveToTrash(_ id: UUID) throws {
         guard let index = library.assets.firstIndex(where: { $0.id == id }) else { return }
         library.assets[index].deletedAt = .now
+        recomputeClusters()
         try saveLibrary()
     }
 
     func restore(_ id: UUID) throws {
         guard let index = library.assets.firstIndex(where: { $0.id == id }) else { return }
         library.assets[index].deletedAt = nil
+        recomputeClusters()
         try saveLibrary()
     }
 
     func deleteForever(_ id: UUID) throws {
         guard let index = library.assets.firstIndex(where: { $0.id == id }) else { return }
         library.assets.remove(at: index)
+        let removedFaceIDs = Set(library.detectedFaces.filter { $0.assetID == id }.map(\.id))
+        for fID in removedFaceIDs {
+            faceCropCache[fID] = nil
+        }
+        library.detectedFaces.removeAll { $0.assetID == id }
+        for pIdx in library.people.indices {
+            library.people[pIdx].exemplarFaceIDs.removeAll { removedFaceIDs.contains($0) }
+            library.people[pIdx].reviewCandidateAssetIDs.removeAll { $0 == id }
+            if library.people[pIdx].coverAssetID == id {
+                library.people[pIdx].coverAssetID = nil
+            }
+        }
+        recomputeClusters()
         try saveLibrary()
         for suffix in [".enc", ".thumb"] {
             try? FileManager.default.removeItem(at: filesURL.appendingPathComponent(id.uuidString + suffix))
@@ -1041,14 +1661,54 @@ final class MemoryStore: ObservableObject {
         return vaultKey
     }
 
-    func importData(_ data: Data, name: String, mime: String, secure: Bool = false) throws {
+    @discardableResult
+    func importData(
+        _ data: Data,
+        name: String,
+        mime: String,
+        secure: Bool = false,
+        targetAlbumID: UUID? = nil,
+        targetSectionID: UUID? = nil,
+        targetPersonID: UUID? = nil,
+        batchMode: Bool = false
+    ) throws -> (assetID: UUID, image: UIImage?) {
         guard let account, authenticated else { throw MemoraError.noAccount }
         guard data.count <= fileLimit else { throw MemoraError.fileTooLarge }
         let hash = MemoraCrypto.sha256(data)
+
+        // Si el archivo ya existe en la biblioteca pero el usuario lo está añadiendo dentro de un álbum, sección o persona,
+        // asociarlo directamente al álbum/sección/persona en vez de ignorarlo
+        if !secure, let existingIdx = library.assets.firstIndex(where: { $0.sha256 == hash }) {
+            let existingID = library.assets[existingIdx].id
+            var updatedExisting = false
+            if library.assets[existingIdx].deletedAt != nil {
+                library.assets[existingIdx].deletedAt = nil
+                updatedExisting = true
+            }
+            if let targetAlbumID, !library.assets[existingIdx].albumIDs.contains(targetAlbumID) {
+                library.assets[existingIdx].albumIDs.append(targetAlbumID)
+                updatedExisting = true
+            }
+            if let targetSectionID {
+                try? addAssets([existingID], toSection: targetSectionID)
+                updatedExisting = true
+            }
+            if let targetPersonID {
+                try? assign(existingID, to: targetPersonID, saveImmediately: !batchMode)
+                updatedExisting = true
+            }
+            if updatedExisting {
+                if !batchMode { try? saveLibrary() }
+                return (existingID, nil)
+            }
+            throw MemoraError.duplicate
+        }
+
         let exists = secure
             ? privateLibrary?.assets.contains(where: { $0.sha256 == hash }) == true
             : library.assets.contains(where: { $0.sha256 == hash })
         guard !exists else { throw MemoraError.duplicate }
+
         let id = UUID()
         let key = MemoraCrypto.randomKey()
         let wrapping = try (secure ? requiredVaultKey() : fileWrapKey())
@@ -1066,21 +1726,43 @@ final class MemoryStore: ObservableObject {
         try write(encrypted, to: originalURL)
         var thumbnail = false
         do {
-            var sourceImage: UIImage? = nil
+            var scaledImage: UIImage? = nil
             if mime.hasPrefix("image/"), let image = UIImage(data: data) {
-                sourceImage = image
-                let side: CGFloat = 420
+                let side: CGFloat = 480
                 let ratio = min(side / image.size.width, side / image.size.height, 1)
                 let size = CGSize(width: image.size.width * ratio, height: image.size.height * ratio)
                 let scaled = UIGraphicsImageRenderer(size: size).image { _ in
                     image.draw(in: CGRect(origin: .zero, size: size))
                 }
-                if let jpeg = scaled.jpegData(compressionQuality: 0.75) {
+                scaledImage = scaled
+                if let jpeg = scaled.jpegData(compressionQuality: 0.78) {
                     try write(MemoraCrypto.seal(
                         jpeg, key: key, context: "memora:account:\(account.id):thumb:\(id)"
                     ), to: filesURL.appendingPathComponent(id.uuidString + ".thumb"))
                     thumbnail = true
                 }
+            }
+
+            // Resolver álbum destino si se importó desde dentro de un Álbum o de una Sección
+            var initialAlbumIDs: [UUID] = []
+            if let targetAlbumID {
+                initialAlbumIDs.append(targetAlbumID)
+            }
+            if let targetSectionID, let section = library.sections.first(where: { $0.id == targetSectionID }) {
+                var sectionAlbum = library.albums.first(where: { $0.sectionID == targetSectionID })
+                if sectionAlbum == nil {
+                    let created = MemoryAlbum(id: UUID(), name: "General · \(section.name)", sectionID: targetSectionID, createdAt: .now)
+                    library.albums.append(created)
+                    sectionAlbum = created
+                }
+                if let sAlbumID = sectionAlbum?.id, !initialAlbumIDs.contains(sAlbumID) {
+                    initialAlbumIDs.append(sAlbumID)
+                }
+            }
+
+            var initialPersonIDs: [UUID] = []
+            if let targetPersonID {
+                initialPersonIDs.append(targetPersonID)
             }
 
             let meta = AssetMetadataExtractor.extract(from: data)
@@ -1094,6 +1776,8 @@ final class MemoryStore: ObservableObject {
                 capturedAt: meta.date ?? .now,
                 sha256: hash,
                 wrappedFileKey: envelope,
+                albumIDs: initialAlbumIDs,
+                personIDs: initialPersonIDs,
                 location: meta.location ?? "",
                 hasThumbnail: thumbnail,
                 cameraModel: meta.camera,
@@ -1109,20 +1793,22 @@ final class MemoryStore: ObservableObject {
             if secure {
                 guard privateLibrary != nil else { throw MemoraError.locked }
                 privateLibrary?.assets.insert(asset, at: 0)
-                try saveVault()
+                if !batchMode { try saveVault() }
             } else {
                 library.assets.insert(asset, at: 0)
                 if !library.processedAssetHashes.contains(hash) {
                     library.processedAssetHashes.append(hash)
                 }
-                try saveLibrary()
-
-                if let img = sourceImage {
-                    Task { [weak self] in
-                        await self?.processFacesForAsset(id, image: img)
+                if !batchMode {
+                    try saveLibrary()
+                    if let img = scaledImage {
+                        Task { [weak self] in
+                            await self?.processFacesForAsset(id, image: img, saveAndCluster: true)
+                        }
                     }
                 }
             }
+            return (id, scaledImage)
         } catch {
             library = previousLibrary
             privateLibrary = previousPrivateLibrary
@@ -1132,20 +1818,39 @@ final class MemoryStore: ObservableObject {
         }
     }
 
-    func importPhotoItems(_ items: [PhotosPickerItem], secure: Bool = false) async {
+    func importPhotoItems(
+        _ items: [PhotosPickerItem],
+        secure: Bool = false,
+        targetAlbumID: UUID? = nil,
+        targetSectionID: UUID? = nil,
+        targetPersonID: UUID? = nil
+    ) async {
         busy = true
         defer { busy = false }
         var imported = 0
+        var pendingFaceAssets: [(UUID, UIImage)] = []
+
         for item in items {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self) else {
-                    notice = "iOS no entregó una representación compatible de uno de los archivos."
                     continue
                 }
                 let type = item.supportedContentTypes.first
-                let mime = type?.preferredMIMEType ?? "application/octet-stream"
-                let ext = type?.preferredFilenameExtension ?? "bin"
-                try importData(data, name: "Recuerdo-\(UUID().uuidString.prefix(8)).\(ext)", mime: mime, secure: secure)
+                let mime = type?.preferredMIMEType ?? "image/jpeg"
+                let ext = type?.preferredFilenameExtension ?? "jpg"
+                let result = try importData(
+                    data,
+                    name: "Recuerdo-\(UUID().uuidString.prefix(8)).\(ext)",
+                    mime: mime,
+                    secure: secure,
+                    targetAlbumID: targetAlbumID,
+                    targetSectionID: targetSectionID,
+                    targetPersonID: targetPersonID,
+                    batchMode: true
+                )
+                if let img = result.image {
+                    pendingFaceAssets.append((result.assetID, img))
+                }
                 imported += 1
             } catch MemoraError.duplicate {
                 continue
@@ -1154,11 +1859,38 @@ final class MemoryStore: ObservableObject {
                 break
             }
         }
-        if imported > 0 { notice = "\(imported) archivo\(imported == 1 ? "" : "s") importado\(imported == 1 ? "" : "s")." }
+
+        if imported > 0 {
+            if secure {
+                try? saveVault()
+            } else {
+                try? saveLibrary()
+            }
+            notice = "\(imported) archivo\(imported == 1 ? "" : "s") integrado\(imported == 1 ? "" : "s") correctamente."
+
+            if !secure && !pendingFaceAssets.isEmpty {
+                Task { [weak self] in
+                    guard let self else { return }
+                    for (assetID, img) in pendingFaceAssets {
+                        await self.processFacesForAsset(assetID, image: img, saveAndCluster: false)
+                    }
+                    self.recomputeClusters()
+                    try? self.saveLibrary()
+                }
+            }
+        }
     }
 
-    func importURLs(_ urls: [URL], secure: Bool = false) {
+    func importURLs(
+        _ urls: [URL],
+        secure: Bool = false,
+        targetAlbumID: UUID? = nil,
+        targetSectionID: UUID? = nil,
+        targetPersonID: UUID? = nil
+    ) {
         var imported = 0
+        var pendingFaceAssets: [(UUID, UIImage)] = []
+
         for url in urls {
             let granted = url.startAccessingSecurityScopedResource()
             defer { if granted { url.stopAccessingSecurityScopedResource() } }
@@ -1167,9 +1899,19 @@ final class MemoryStore: ObservableObject {
                     throw MemoraError.fileTooLarge
                 }
                 let data = try Data(contentsOf: url)
-                try importData(data, name: url.lastPathComponent,
-                               mime: (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"),
-                               secure: secure)
+                let result = try importData(
+                    data,
+                    name: url.lastPathComponent,
+                    mime: (UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"),
+                    secure: secure,
+                    targetAlbumID: targetAlbumID,
+                    targetSectionID: targetSectionID,
+                    targetPersonID: targetPersonID,
+                    batchMode: true
+                )
+                if let img = result.image {
+                    pendingFaceAssets.append((result.assetID, img))
+                }
                 imported += 1
             } catch MemoraError.duplicate {
                 continue
@@ -1178,7 +1920,26 @@ final class MemoryStore: ObservableObject {
                 break
             }
         }
-        if imported > 0 { notice = "\(imported) archivo\(imported == 1 ? "" : "s") importado\(imported == 1 ? "" : "s")." }
+
+        if imported > 0 {
+            if secure {
+                try? saveVault()
+            } else {
+                try? saveLibrary()
+            }
+            notice = "\(imported) archivo\(imported == 1 ? "" : "s") integrado\(imported == 1 ? "" : "s") correctamente."
+
+            if !secure && !pendingFaceAssets.isEmpty {
+                Task { [weak self] in
+                    guard let self else { return }
+                    for (assetID, img) in pendingFaceAssets {
+                        await self.processFacesForAsset(assetID, image: img, saveAndCluster: false)
+                    }
+                    self.recomputeClusters()
+                    try? self.saveLibrary()
+                }
+            }
+        }
     }
 
     func thumbnail(for asset: MemoryAsset, secure: Bool = false) -> UIImage? {
@@ -1225,6 +1986,7 @@ final class MemoryStore: ObservableObject {
 
     func clearPreviewCache() {
         thumbnailCache.removeAll()
+        faceCropCache.removeAll()
         try? FileManager.default.removeItem(at: temporaryURL)
         notice = "Caché temporal liberada. Los originales cifrados se conservan."
     }
@@ -1255,6 +2017,7 @@ final class MemoryStore: ObservableObject {
         do {
             try saveVault()
             try saveAccount()
+            try? BiometricVault.save(key, account: account.id)
         } catch {
             self.account = previous
             lockVault()
@@ -1286,12 +2049,13 @@ final class MemoryStore: ObservableObject {
             plain, key: SymmetricKey(data: nextRecovery),
             context: "memora:account:\(account.id):vault-recovery"
         )
-        vaultKey = SymmetricKey(data: plain)
+        let unlockedVaultKey = SymmetricKey(data: plain)
+        vaultKey = unlockedVaultKey
         do { try loadVault() } catch { lockVault(); throw error }
         self.account = account
         try saveAccount()
+        try? BiometricVault.save(unlockedVaultKey, account: account.id)
         vaultDeadline = Date().addingTimeInterval(15 * 60)
-        BiometricVault.remove(account: account.id)
         return MemoraCrypto.recoveryString(nextRecovery)
     }
 
@@ -1303,14 +2067,21 @@ final class MemoryStore: ObservableObject {
             context: "memora:account:\(account.id):vault-key"
         )
         guard plain.count == 32 else { throw MemoraError.corruptData }
-        vaultKey = SymmetricKey(data: plain)
+        let unlockedVaultKey = SymmetricKey(data: plain)
+        vaultKey = unlockedVaultKey
         do { try loadVault() } catch { lockVault(); throw error }
+        try? BiometricVault.save(unlockedVaultKey, account: account.id)
         vaultDeadline = Date().addingTimeInterval(15 * 60)
     }
 
-    func unlockVaultWithBiometrics() throws {
+    func unlockVaultWithBiometrics() async throws {
         guard let account else { throw MemoraError.noAccount }
-        vaultKey = try BiometricVault.read(account: account.id)
+        guard !isPerformingBiometricAuth else { return }
+        isPerformingBiometricAuth = true
+        defer { isPerformingBiometricAuth = false }
+
+        let key = try await BiometricVault.read(account: account.id)
+        vaultKey = key
         do { try loadVault() } catch { lockVault(); throw error }
         vaultDeadline = Date().addingTimeInterval(15 * 60)
     }
@@ -1321,6 +2092,7 @@ final class MemoryStore: ObservableObject {
     }
 
     func lockVault() {
+        guard !isPerformingBiometricAuth else { return }
         vaultKey = nil
         vaultDeadline = nil
         privateLibrary = nil

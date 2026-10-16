@@ -249,16 +249,10 @@ enum BiometricVault {
     private static let service = "app.memora.native.vault"
 
     static func available() -> Bool {
-        let context = LAContext()
-        return context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        BiometricAuth.available()
     }
 
     static func save(_ key: SymmetricKey, account: UUID) throws {
-        guard available() else { throw MemoraError.invalidInput("Face ID no está disponible.") }
-        var error: Unmanaged<CFError>?
-        guard let control = SecAccessControlCreateWithFlags(
-            nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, .biometryCurrentSet, &error
-        ) else { throw MemoraError.corruptData }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -266,31 +260,43 @@ enum BiometricVault {
         ]
         SecItemDelete(query as CFDictionary)
         var add = query
-        add[kSecAttrAccessControl as String] = control
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         add[kSecValueData as String] = MemoraCrypto.bytes(key)
         guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else {
             throw MemoraError.corruptData
         }
     }
 
-    static func read(account: UUID) throws -> SymmetricKey {
-        let context = LAContext()
-        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else {
-            throw MemoraError.invalidInput("Face ID no está disponible.")
+    static func hasKey(account: UUID) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account.uuidString,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess
+    }
+
+    static func read(account: UUID) async throws -> SymmetricKey {
+        guard available() else {
+            throw MemoraError.invalidInput("Face ID no está disponible en este dispositivo.")
+        }
+        let authenticated = await BiometricAuth.authenticate(reason: "Desbloquear la bóveda privada de Memora")
+        guard authenticated else {
+            throw MemoraError.invalidInput("Verificación de Face ID cancelada.")
         }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account.uuidString,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: context,
-            kSecUseOperationPrompt as String: "Desbloquear la bóveda de Memora"
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data, data.count == 32 else {
-            throw MemoraError.invalidInput("No se pudo desbloquear con Face ID. Usa la contraseña de la bóveda.")
+            throw MemoraError.invalidInput("Desbloquea primero una vez con tu contraseña de bóveda para vincular Face ID.")
         }
         return SymmetricKey(data: data)
     }

@@ -453,9 +453,11 @@ struct AlbumDetailView: View {
 
                     if !secure && !store.unalbumedPhotoAssets.isEmpty && !assets.isEmpty {
                         Button {
-                            let count = store.autoOrganizeUnalbumedAssetsByFaces(targetAlbumID: album.id)
-                            if count == 0 {
-                                store.notice = "No se encontraron fotos sin álbum con rostros que coincidan con '\(album.name)'."
+                            Task {
+                                let count = await store.autoOrganizeUnalbumedAssetsByFaces(targetAlbumID: album.id)
+                                if count == 0 {
+                                    store.notice = "No se encontraron fotos sin álbum con rostros que coincidan con '\(album.name)'."
+                                }
                             }
                         } label: {
                             Label("Auto-integrar fotos sin álbum por rostros (\(store.unalbumedPhotoAssets.count) pendientes)", systemImage: "wand.and.stars")
@@ -1227,9 +1229,11 @@ struct PeopleView: View {
 
                     if !store.unalbumedPhotoAssets.isEmpty && !store.library.albums.isEmpty {
                         Button {
-                            let count = store.autoOrganizeUnalbumedAssetsByFaces()
-                            if count == 0 {
-                                store.notice = "Aún no hay coincidencias faciales suficientes con tus álbumes."
+                            Task {
+                                let count = await store.autoOrganizeUnalbumedAssetsByFaces()
+                                if count == 0 {
+                                    store.notice = "Aún no hay coincidencias faciales suficientes con tus álbumes."
+                                }
                             }
                         } label: {
                             Label("Auto-integrar \(store.unalbumedPhotoAssets.count) fotos sin álbum por caras", systemImage: "wand.and.stars")
